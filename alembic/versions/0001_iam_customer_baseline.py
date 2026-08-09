@@ -1,0 +1,416 @@
+"""IAM + Customer baseline
+
+Revision ID: 0001
+Revises:
+"""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+revision = "0001"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+TENANT = "11111111-1111-1111-1111-111111111111"
+ADMIN_ROLE = "10000000-0000-0000-0000-000000000001"
+SALES_ROLE = "10000000-0000-0000-0000-000000000002"
+VIEWER_ROLE = "10000000-0000-0000-0000-000000000003"
+
+TW_SALES_GROUP = "20000000-0000-0000-0000-000000000001"
+KEY_ACCOUNT_GROUP = "20000000-0000-0000-0000-000000000002"
+WAREHOUSE_GROUP = "20000000-0000-0000-0000-000000000003"
+
+ADMIN = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+JACK = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+MARY = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+WAREHOUSE = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+
+POL_ADMIN = "30000000-0000-0000-0000-000000000001"
+POL_SALES = "30000000-0000-0000-0000-000000000002"
+POL_KEY = "30000000-0000-0000-0000-000000000003"
+POL_NO_EXPORT = "30000000-0000-0000-0000-000000000004"
+POL_WAREHOUSE = "30000000-0000-0000-0000-000000000005"
+
+CUSTOMER_APPLE = "40000000-0000-0000-0000-000000000001"
+CUSTOMER_DELL = "40000000-0000-0000-0000-000000000002"
+CUSTOMER_INTEL = "40000000-0000-0000-0000-000000000003"
+CUSTOMER_HP = "40000000-0000-0000-0000-000000000004"
+
+
+def upgrade() -> None:
+    op.create_table(
+        "tenants",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("code", sa.String(50), nullable=False, unique=True),
+        sa.Column("name", sa.String(200), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+
+    op.create_table(
+        "roles",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("code", sa.String(80), nullable=False, unique=True),
+        sa.Column("name", sa.String(120), nullable=False),
+        sa.Column("description", sa.Text()),
+        sa.Column("is_system", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
+    )
+
+    op.create_table(
+        "groups",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenants.id"), nullable=False),
+        sa.Column("code", sa.String(80), nullable=False),
+        sa.Column("name", sa.String(120), nullable=False),
+        sa.Column("description", sa.Text()),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.UniqueConstraint("tenant_id", "code", name="uq_groups_tenant_code"),
+    )
+
+    op.create_table(
+        "profiles",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenants.id"), nullable=False),
+        sa.Column("email", sa.String(320), nullable=False, unique=True),
+        sa.Column("display_name", sa.String(160), nullable=False),
+        sa.Column("primary_role_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("roles.id")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("locale", sa.String(20), nullable=False, server_default="zh-TW"),
+        sa.Column("timezone", sa.String(80), nullable=False, server_default="Asia/Taipei"),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+
+    op.create_table(
+        "user_groups",
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id"), primary_key=True),
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("groups.id"), primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+
+    op.create_table(
+        "permissions",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("code", sa.String(160), nullable=False, unique=True),
+        sa.Column("resource", sa.String(100), nullable=False),
+        sa.Column("action", sa.String(100), nullable=False),
+        sa.Column("description", sa.Text()),
+    )
+
+    op.create_table(
+        "policies",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenants.id")),
+        sa.Column("code", sa.String(100), nullable=False),
+        sa.Column("name", sa.String(160), nullable=False),
+        sa.Column("description", sa.Text()),
+        sa.Column("is_system", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.UniqueConstraint("tenant_id", "code", name="uq_policies_tenant_code"),
+    )
+
+    op.create_table(
+        "policy_permissions",
+        sa.Column("policy_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("policies.id"), primary_key=True),
+        sa.Column("permission_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("permissions.id"), primary_key=True),
+        sa.Column("effect", sa.String(10), nullable=False),
+        sa.Column("scope", sa.String(20)),
+    )
+
+    op.create_table(
+        "role_policies",
+        sa.Column("role_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("roles.id"), primary_key=True),
+        sa.Column("policy_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("policies.id"), primary_key=True),
+    )
+
+    op.create_table(
+        "group_policies",
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("groups.id"), primary_key=True),
+        sa.Column("policy_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("policies.id"), primary_key=True),
+    )
+
+    op.create_table(
+        "user_policies",
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id"), primary_key=True),
+        sa.Column("policy_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("policies.id"), primary_key=True),
+    )
+
+    op.create_table(
+        "audit_logs",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenants.id"), nullable=False),
+        sa.Column("actor_user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id")),
+        sa.Column("action", sa.String(120), nullable=False),
+        sa.Column("target_type", sa.String(120), nullable=False),
+        sa.Column("target_id", sa.String(160), nullable=False),
+        sa.Column("before_data", postgresql.JSONB()),
+        sa.Column("after_data", postgresql.JSONB()),
+        sa.Column("correlation_id", sa.String(120)),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+
+    op.create_table(
+        "customers",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenants.id"), nullable=False),
+        sa.Column("customer_code", sa.String(80), nullable=False),
+        sa.Column("customer_name", sa.String(240), nullable=False),
+        sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id")),
+        sa.Column("status", sa.String(30), nullable=False, server_default="ACTIVE"),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("deleted_by", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id")),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("tenant_id", "customer_code", name="uq_customers_tenant_code"),
+    )
+    op.create_index("ix_customers_tenant_owner", "customers", ["tenant_id", "owner_user_id"])
+    op.create_index("ix_customers_tenant_status", "customers", ["tenant_id", "status"])
+
+    op.create_table(
+        "customer_user_assignments",
+        sa.Column("customer_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("customers.id"), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("profiles.id"), primary_key=True),
+        sa.Column("assignment_type", sa.String(40), nullable=False, server_default="MEMBER"),
+    )
+
+    op.create_table(
+        "customer_group_assignments",
+        sa.Column("customer_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("customers.id"), primary_key=True),
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("groups.id"), primary_key=True),
+    )
+
+    # Seed tenant, roles, groups and users.
+    # asyncpg prepared statements accept one top-level SQL command at a time,
+    # so each INSERT is executed separately.
+    op.execute(
+        f"""
+        INSERT INTO tenants (id, code, name)
+        VALUES ('{TENANT}', 'LOCAL', 'Local Demo Company')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO roles (id, code, name, description, is_system)
+        VALUES
+        ('{ADMIN_ROLE}', 'ADMIN', 'Administrator', 'System administrator', true),
+        ('{SALES_ROLE}', 'SALES', 'Sales', 'Sales baseline role', true),
+        ('{VIEWER_ROLE}', 'VIEWER', 'Viewer', 'Read-only baseline role', true)
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO groups (id, tenant_id, code, name, description)
+        VALUES
+        ('{TW_SALES_GROUP}', '{TENANT}', 'TW_SALES', 'Taiwan Sales', 'Taiwan sales team'),
+        ('{KEY_ACCOUNT_GROUP}', '{TENANT}', 'KEY_ACCOUNT', 'Key Account', 'Strategic account team'),
+        ('{WAREHOUSE_GROUP}', '{TENANT}', 'WAREHOUSE', 'Warehouse', 'Warehouse users')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO profiles
+            (id, tenant_id, email, display_name, primary_role_id, is_active)
+        VALUES
+        ('{ADMIN}', '{TENANT}', 'kevin@local.test', 'Kevin Admin', '{ADMIN_ROLE}', true),
+        ('{JACK}', '{TENANT}', 'jack@local.test', 'Jack Sales', '{SALES_ROLE}', true),
+        ('{MARY}', '{TENANT}', 'mary@local.test', 'Mary Sales', '{SALES_ROLE}', true),
+        ('{WAREHOUSE}', '{TENANT}', 'warehouse@local.test', 'Warehouse User', '{VIEWER_ROLE}', true)
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO user_groups (user_id, group_id)
+        VALUES
+        ('{JACK}', '{TW_SALES_GROUP}'),
+        ('{JACK}', '{KEY_ACCOUNT_GROUP}'),
+        ('{MARY}', '{TW_SALES_GROUP}'),
+        ('{WAREHOUSE}', '{WAREHOUSE_GROUP}')
+        """
+    )
+
+    permission_rows = [
+        ("50000000-0000-0000-0000-000000000001", "customers.read", "customers", "read"),
+        ("50000000-0000-0000-0000-000000000002", "customers.detail.read", "customers.detail", "read"),
+        ("50000000-0000-0000-0000-000000000003", "customers.create", "customers", "create"),
+        ("50000000-0000-0000-0000-000000000004", "customers.update", "customers", "update"),
+        ("50000000-0000-0000-0000-000000000005", "customers.delete", "customers", "delete"),
+        ("50000000-0000-0000-0000-000000000006", "customers.restore", "customers", "restore"),
+        ("50000000-0000-0000-0000-000000000007", "customers.assign_owner", "customers", "assign_owner"),
+        ("50000000-0000-0000-0000-000000000008", "customers.export", "customers", "export"),
+        ("50000000-0000-0000-0000-000000000009", "inventory.read", "inventory", "read"),
+        ("50000000-0000-0000-0000-000000000010", "shipments.read", "shipments", "read"),
+    ]
+    values = ",".join(
+        f"('{pid}','{code}','{resource}','{action}','Seed permission')"
+        for pid, code, resource, action in permission_rows
+    )
+    op.execute(
+        "INSERT INTO permissions (id, code, resource, action, description) VALUES " + values
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO policies (id, tenant_id, code, name, description, is_system) VALUES
+        ('{POL_ADMIN}', '{TENANT}', 'ADMIN_BASE_POLICY', 'Admin Base', 'All demo permissions', true),
+        ('{POL_SALES}', '{TENANT}', 'SALES_BASE_POLICY', 'Sales Base', 'Sales customer access', true),
+        ('{POL_KEY}', '{TENANT}', 'KEY_ACCOUNT_POLICY', 'Key Account', 'Broader customer access', true),
+        ('{POL_NO_EXPORT}', '{TENANT}', 'NO_CUSTOMER_EXPORT', 'No Customer Export', 'Explicit deny example', true),
+        ('{POL_WAREHOUSE}', '{TENANT}', 'WAREHOUSE_BASE_POLICY', 'Warehouse Base', 'Warehouse module access', true)
+        """
+    )
+
+    # Admin gets ALL on every seeded permission.
+    op.execute(
+        f"""
+        INSERT INTO policy_permissions (policy_id, permission_id, effect, scope)
+        SELECT '{POL_ADMIN}', id, 'ALLOW', 'ALL'
+        FROM permissions
+        """
+    )
+
+    # Sales baseline.
+    op.execute(
+        f"""
+        INSERT INTO policy_permissions (policy_id, permission_id, effect, scope)
+        SELECT '{POL_SALES}', id, 'ALLOW',
+            CASE
+                WHEN code IN ('customers.read', 'customers.detail.read') THEN 'TEAM'
+                WHEN code = 'customers.create' THEN 'ALL'
+                WHEN code = 'customers.update' THEN 'OWN'
+                WHEN code = 'customers.export' THEN 'OWN'
+                ELSE 'NONE'
+            END
+        FROM permissions
+        WHERE code IN (
+            'customers.read',
+            'customers.detail.read',
+            'customers.create',
+            'customers.update',
+            'customers.export'
+        )
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO policy_permissions (policy_id, permission_id, effect, scope)
+        SELECT '{POL_KEY}', id, 'ALLOW', 'ALL'
+        FROM permissions
+        WHERE code = 'customers.export'
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO policy_permissions (policy_id, permission_id, effect, scope)
+        SELECT '{POL_NO_EXPORT}', id, 'DENY', NULL
+        FROM permissions
+        WHERE code = 'customers.export'
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO policy_permissions (policy_id, permission_id, effect, scope)
+        SELECT '{POL_WAREHOUSE}', id, 'ALLOW', 'ALL'
+        FROM permissions
+        WHERE code IN ('inventory.read', 'shipments.read')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO role_policies (role_id, policy_id)
+        VALUES
+        ('{ADMIN_ROLE}', '{POL_ADMIN}'),
+        ('{SALES_ROLE}', '{POL_SALES}')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO group_policies (group_id, policy_id)
+        VALUES
+        ('{KEY_ACCOUNT_GROUP}', '{POL_KEY}'),
+        ('{WAREHOUSE_GROUP}', '{POL_WAREHOUSE}')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO user_policies (user_id, policy_id)
+        VALUES ('{JACK}', '{POL_NO_EXPORT}')
+        """
+    )
+
+    # Seed customers.
+    op.execute(
+        f"""
+        INSERT INTO customers
+            (id, tenant_id, customer_code, customer_name, owner_user_id, status)
+        VALUES
+        ('{CUSTOMER_APPLE}', '{TENANT}', 'CUST001', 'Apple Demo', '{JACK}', 'ACTIVE'),
+        ('{CUSTOMER_DELL}', '{TENANT}', 'CUST002', 'Dell Demo', '{JACK}', 'ACTIVE'),
+        ('{CUSTOMER_INTEL}', '{TENANT}', 'CUST003', 'Intel Demo', '{MARY}', 'ACTIVE'),
+        ('{CUSTOMER_HP}', '{TENANT}', 'CUST004', 'HP Demo', '{MARY}', 'ACTIVE')
+        """
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO customer_group_assignments (customer_id, group_id)
+        VALUES
+        ('{CUSTOMER_APPLE}', '{TW_SALES_GROUP}'),
+        ('{CUSTOMER_DELL}', '{TW_SALES_GROUP}'),
+        ('{CUSTOMER_INTEL}', '{TW_SALES_GROUP}'),
+        ('{CUSTOMER_HP}', '{KEY_ACCOUNT_GROUP}')
+        """
+    )
+
+    # Runtime grants if app_runtime already exists.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
+                GRANT USAGE ON SCHEMA public TO app_runtime;
+                GRANT SELECT ON tenants, roles, groups, profiles, user_groups,
+                    permissions, policies, policy_permissions, role_policies,
+                    group_policies, user_policies, audit_logs,
+                    customer_user_assignments, customer_group_assignments TO app_runtime;
+                GRANT SELECT, INSERT, UPDATE ON customers TO app_runtime;
+            END IF;
+        END $$;
+        """
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("customer_group_assignments")
+    op.drop_table("customer_user_assignments")
+    op.drop_index("ix_customers_tenant_status", table_name="customers")
+    op.drop_index("ix_customers_tenant_owner", table_name="customers")
+    op.drop_table("customers")
+    op.drop_table("audit_logs")
+    op.drop_table("user_policies")
+    op.drop_table("group_policies")
+    op.drop_table("role_policies")
+    op.drop_table("policy_permissions")
+    op.drop_table("policies")
+    op.drop_table("permissions")
+    op.drop_table("user_groups")
+    op.drop_table("profiles")
+    op.drop_table("groups")
+    op.drop_table("roles")
+    op.drop_table("tenants")
