@@ -5,11 +5,18 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.dependencies.customers import get_customer_use_cases
 from app.api.dependencies.identity import get_current_user
-from app.modules.customers.application.commands import CreateCustomerCommand, UpdateCustomerCommand
+from app.modules.customers.application.commands import (
+    CreateCustomerCommand,
+    CustomerAddressCommand,
+    CustomerImportRowCommand,
+    UpdateCustomerCommand,
+)
 from app.modules.customers.application.use_cases import CustomerUseCases
 from app.modules.customers.domain.repository import CustomerSearchCriteria
 from app.modules.customers.presentation.schemas import (
     CreateCustomerRequest,
+    CustomerImportRequest,
+    CustomerImportResponse,
     CustomerListResponse,
     CustomerResponse,
     CustomerSearchResponse,
@@ -19,6 +26,23 @@ from app.modules.customers.presentation.schemas import (
 from app.shared.domain.current_user import CurrentUser
 
 router = APIRouter(prefix="/customers", tags=["customers"])
+
+
+@router.post("/import", response_model=CustomerImportResponse)
+async def import_customers(
+    request: CustomerImportRequest,
+    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
+) -> CustomerImportResponse:
+    rows = [
+        CustomerImportRowCommand(
+            **row.model_dump(exclude={"row_number"}),
+            row_number=row.row_number if row.row_number is not None else index + 2,
+        )
+        for index, row in enumerate(request.rows)
+    ]
+    total = await use_cases.import_customers(rows, actor)
+    return CustomerImportResponse(total=total, imported=total, failed=0)
 
 
 @router.get("", response_model=CustomerListResponse)
@@ -75,7 +99,17 @@ async def create_customer(
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> CustomerResponse:
     return CustomerResponse.model_validate(
-        await use_cases.create(CreateCustomerCommand(**request.model_dump()), actor)
+        await use_cases.create(
+            CreateCustomerCommand(
+                **request.model_dump(exclude={"default_address"}),
+                default_address=(
+                    CustomerAddressCommand(**request.default_address.model_dump())
+                    if request.default_address
+                    else None
+                ),
+            ),
+            actor,
+        )
     )
 
 

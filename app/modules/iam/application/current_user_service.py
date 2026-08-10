@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from app.core.exceptions import AuthenticationRequired, PermissionDenied
+from app.core.exceptions import AuthenticationRequired
 from app.modules.iam.application.permission_resolver import EffectivePermissionResolver
 from app.modules.iam.domain.repository import IamRepository
 from app.shared.domain.current_user import CurrentUser
@@ -20,7 +20,7 @@ class CurrentUserService:
         if profile is None:
             raise AuthenticationRequired("Authenticated user profile was not found")
         if not profile.is_active:
-            raise PermissionDenied("User is inactive")
+            raise AuthenticationRequired("Authenticated user profile is inactive")
 
         grants = await self.repository.get_permission_grants(user_id)
         permissions = self.resolver.resolve(grants)

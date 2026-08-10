@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_principal
@@ -21,4 +22,14 @@ async def get_current_user(
         repository=SqlAlchemyIamRepository(session),
         resolver=EffectivePermissionResolver(),
     )
-    return await service.load(principal.user_id)
+    current_user = await service.load(principal.user_id)
+    # Transaction-local settings are consumed by tenant RLS policies. Values are
+    # parameterized and disappear automatically at transaction end/pool reuse.
+    await session.execute(
+        text(
+            "SELECT set_config('app.tenant_id', :tenant_id, true), "
+            "set_config('app.user_id', :user_id, true)"
+        ),
+        {"tenant_id": str(current_user.tenant_id), "user_id": str(current_user.user_id)},
+    )
+    return current_user

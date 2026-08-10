@@ -40,6 +40,14 @@ class CustomerPage:
 
 
 class CustomerRepository(Protocol):
+    async def find_existing_codes(self, tenant_id: UUID, codes: set[str]) -> set[str]: ...
+
+    async def find_valid_payment_term_ids(
+        self, tenant_id: UUID, payment_term_ids: set[UUID]
+    ) -> set[UUID]: ...
+
+    async def find_valid_owner_ids(self, tenant_id: UUID, owner_ids: set[UUID]) -> set[UUID]: ...
+
     async def search(
         self,
         criteria: CustomerSearchCriteria,
@@ -59,7 +67,13 @@ class CustomerRepository(Protocol):
         include_deleted: bool = False,
     ) -> Customer | None: ...
 
+    async def get_access_facts(
+        self, customer_id: UUID, *, actor_id: UUID, tenant_id: UUID
+    ) -> CustomerAccessFacts: ...
+
     async def create(self, customer: Customer) -> Customer: ...
+
+    async def create_many(self, customers: list[Customer]) -> None: ...
 
     async def update(
         self,

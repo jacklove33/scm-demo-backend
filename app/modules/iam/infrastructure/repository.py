@@ -13,17 +13,21 @@ class SqlAlchemyIamRepository:
 
     async def get_profile(self, user_id: UUID) -> UserProfile | None:
         row = (
-            await self.session.execute(
-                text(
-                    """
+            (
+                await self.session.execute(
+                    text(
+                        """
                     SELECT id, tenant_id, email, display_name, is_active
                     FROM profiles
                     WHERE id = :user_id
                     """
-                ),
-                {"user_id": user_id},
+                    ),
+                    {"user_id": user_id},
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
 
         if row is None:
             return None
@@ -40,9 +44,10 @@ class SqlAlchemyIamRepository:
         # One SQL statement resolves all raw grants for this request.
         # The merge rule remains in the Application layer.
         rows = (
-            await self.session.execute(
-                text(
-                    """
+            (
+                await self.session.execute(
+                    text(
+                        """
                     WITH user_ctx AS (
                         SELECT id, tenant_id, primary_role_id
                         FROM profiles
@@ -102,10 +107,13 @@ class SqlAlchemyIamRepository:
                     SELECT * FROM direct_grants
                     ORDER BY permission_code, source_type, policy_code
                     """
-                ),
-                {"user_id": user_id},
+                    ),
+                    {"user_id": user_id},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
         return [
             PermissionGrant(

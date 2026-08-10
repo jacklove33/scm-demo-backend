@@ -8,7 +8,6 @@ from app.shared.domain.current_user import (
     PermissionSource,
 )
 
-
 _SCOPE_RANK: dict[PermissionScope, int] = {
     PermissionScope.NONE: 0,
     PermissionScope.OWN: 10,

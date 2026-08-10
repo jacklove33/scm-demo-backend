@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.infrastructure.database.base import Base
 
 # Import models so metadata contains all tables.
+from app.modules.auth.infrastructure import models as auth_models  # noqa: F401
 from app.modules.customers.infrastructure import models as customer_models  # noqa: F401
 from app.modules.iam.infrastructure import models as iam_models  # noqa: F401
 

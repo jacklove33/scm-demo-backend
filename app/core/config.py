@@ -17,9 +17,11 @@ class Settings(BaseSettings):
 
     auth_mode: Literal["dev_header", "jwt"] = "dev_header"
     jwt_secret: str = ""
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = ""
     jwt_audience: str = "authenticated"
+    access_token_expire_minutes: int = Field(default=15, ge=1)
+    refresh_token_expire_days: int = Field(default=14, ge=1)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    return Settings()
 
 
 settings = get_settings()

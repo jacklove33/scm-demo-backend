@@ -28,6 +28,15 @@ class VersionConflict(AppError):
     status_code = 409
 
 
+class EntityConflict(AppError):
+    code = "CONFLICT"
+    status_code = 409
+
+
 class ValidationFailure(AppError):
     code = "VALIDATION_ERROR"
     status_code = 422
+
+
+class ImportValidationFailure(ValidationFailure):
+    code = "IMPORT_VALIDATION_FAILED"

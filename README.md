@@ -105,6 +105,19 @@ Swagger：
 
 ## Local Dev Authentication
 
+Authentication is selected explicitly with `AUTH_MODE=dev_header` or
+`AUTH_MODE=jwt`. JWT mode never accepts `X-Dev-User-Id` as a fallback.
+
+After migration `0003`, establish a local password without storing plaintext
+credentials in migrations or source control:
+
+```bash
+APP_ENV=local .venv/bin/python scripts/set_dev_password.py jack@local.test
+```
+
+JWT mode requires a random `JWT_SECRET` of at least 32 bytes. Token lifetimes
+use `ACCESS_TOKEN_EXPIRE_MINUTES` and `REFRESH_TOKEN_EXPIRE_DAYS`.
+
 `APP_ENV=local` 且 `AUTH_MODE=dev_header` 時，Swagger 每支 API 可傳：
 
 ```text
