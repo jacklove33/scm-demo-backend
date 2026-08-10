@@ -37,6 +37,19 @@ class CustomerResponse(BaseModel):
     updated_at: datetime
 
 
+class CustomerCapabilitiesResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    update: bool
+    delete: bool
+    restore: bool
+    assign_owner: bool
+
+
+class CustomerSearchResponse(CustomerResponse):
+    capabilities: CustomerCapabilitiesResponse
+
+
 class CustomerListResponse(BaseModel):
-    data: list[CustomerResponse]
+    data: list[CustomerSearchResponse]
     meta: dict[str, int]

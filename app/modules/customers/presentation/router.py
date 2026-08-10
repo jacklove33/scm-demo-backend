@@ -12,6 +12,7 @@ from app.modules.customers.presentation.schemas import (
     CreateCustomerRequest,
     CustomerListResponse,
     CustomerResponse,
+    CustomerSearchResponse,
     UpdateCustomerRequest,
     VersionRequest,
 )
@@ -53,7 +54,7 @@ async def search_customers(
         actor,
     )
     return CustomerListResponse(
-        data=[CustomerResponse.model_validate(item) for item in items],
+        data=[CustomerSearchResponse.model_validate(item) for item in items],
         meta={"page": page, "pageSize": page_size, "total": total},
     )
 

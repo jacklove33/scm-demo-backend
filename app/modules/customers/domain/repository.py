@@ -19,8 +19,21 @@ class CustomerSearchCriteria:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerAccessFacts:
+    is_owner: bool
+    is_assigned: bool
+    is_team_assigned: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSearchItem:
+    customer: Customer
+    access: CustomerAccessFacts
+
+
+@dataclass(frozen=True, slots=True)
 class CustomerPage:
-    items: list[Customer]
+    items: list[CustomerSearchItem]
     total: int
     page: int
     page_size: int

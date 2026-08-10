@@ -1,25 +1,31 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from app.core.exceptions import EntityNotFound, PermissionDenied, VersionConflict
+from app.core.exceptions import EntityNotFound, PermissionDenied
+from app.modules.customers.application.capabilities import CustomerCapabilityPolicy
 from app.modules.customers.application.commands import CreateCustomerCommand, UpdateCustomerCommand
-from app.modules.customers.application.dto import CustomerDTO
+from app.modules.customers.application.dto import CustomerDTO, CustomerSearchDTO
 from app.modules.customers.domain.entities import Customer
 from app.modules.customers.domain.repository import CustomerRepository, CustomerSearchCriteria
-from app.shared.domain.current_user import CurrentUser, PermissionScope
+from app.shared.domain.current_user import CurrentUser
 
 
 class CustomerUseCases:
     """No role checks here. Authorization is permission + scope only."""
 
-    def __init__(self, repository: CustomerRepository) -> None:
+    def __init__(
+        self,
+        repository: CustomerRepository,
+        capability_policy: CustomerCapabilityPolicy | None = None,
+    ) -> None:
         self.repository = repository
+        self.capability_policy = capability_policy or CustomerCapabilityPolicy()
 
     async def search(
         self,
         criteria: CustomerSearchCriteria,
         actor: CurrentUser,
-    ) -> tuple[list[CustomerDTO], int]:
+    ) -> tuple[list[CustomerSearchDTO], int]:
         self._require(actor, "customers.read")
         scope = actor.scope_for("customers.read")
 
@@ -29,7 +35,13 @@ class CustomerUseCases:
             tenant_id=actor.tenant_id,
             scope=scope,
         )
-        return [CustomerDTO.from_domain(item) for item in page.items], page.total
+        return [
+            CustomerSearchDTO.from_domain_with_capabilities(
+                item.customer,
+                self.capability_policy.evaluate(item.customer, item.access, actor),
+            )
+            for item in page.items
+        ], page.total
 
     async def get(self, customer_id: UUID, actor: CurrentUser) -> CustomerDTO:
         self._require(actor, "customers.detail.read")

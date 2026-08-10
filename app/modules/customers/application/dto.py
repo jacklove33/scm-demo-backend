@@ -2,6 +2,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.modules.customers.application.capabilities import CustomerCapabilities
 from app.modules.customers.domain.entities import Customer
 
 
@@ -30,3 +31,16 @@ class CustomerDTO:
             created_at=customer.created_at,
             updated_at=customer.updated_at,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSearchDTO(CustomerDTO):
+    capabilities: CustomerCapabilities
+
+    @classmethod
+    def from_domain_with_capabilities(
+        cls,
+        customer: Customer,
+        capabilities: CustomerCapabilities,
+    ) -> "CustomerSearchDTO":
+        return cls(**asdict(CustomerDTO.from_domain(customer)), capabilities=capabilities)

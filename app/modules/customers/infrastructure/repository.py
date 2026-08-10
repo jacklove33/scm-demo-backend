@@ -1,12 +1,18 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, and_, exists, func, or_, select, update
+from sqlalchemy import Select, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.exceptions import VersionConflict
 from app.modules.customers.domain.entities import Customer
-from app.modules.customers.domain.repository import CustomerPage, CustomerSearchCriteria
+from app.modules.customers.domain.repository import (
+    CustomerAccessFacts,
+    CustomerPage,
+    CustomerSearchCriteria,
+    CustomerSearchItem,
+)
 from app.modules.customers.infrastructure.models import (
     CustomerGroupAssignmentModel,
     CustomerModel,
@@ -36,6 +42,29 @@ class SqlAlchemyCustomerRepository:
             updated_at=row.updated_at,
         )
 
+    @staticmethod
+    def _is_assigned(actor_id: UUID) -> ColumnElement[bool]:
+        return exists(
+            select(CustomerUserAssignmentModel.customer_id).where(
+                CustomerUserAssignmentModel.customer_id == CustomerModel.id,
+                CustomerUserAssignmentModel.user_id == actor_id,
+            )
+        )
+
+    @staticmethod
+    def _is_team_assigned(actor_id: UUID) -> ColumnElement[bool]:
+        return exists(
+            select(CustomerGroupAssignmentModel.customer_id)
+            .join(
+                UserGroupModel,
+                UserGroupModel.group_id == CustomerGroupAssignmentModel.group_id,
+            )
+            .where(
+                CustomerGroupAssignmentModel.customer_id == CustomerModel.id,
+                UserGroupModel.user_id == actor_id,
+            )
+        )
+
     def _apply_scope(
         self,
         stmt: Select,
@@ -53,30 +82,13 @@ class SqlAlchemyCustomerRepository:
             return stmt.where(CustomerModel.owner_user_id == actor_id)
 
         if scope == PermissionScope.ASSIGNED:
-            assignment_exists = exists(
-                select(CustomerUserAssignmentModel.customer_id).where(
-                    CustomerUserAssignmentModel.customer_id == CustomerModel.id,
-                    CustomerUserAssignmentModel.user_id == actor_id,
-                )
-            )
-            return stmt.where(assignment_exists)
+            return stmt.where(self._is_assigned(actor_id))
 
         if scope == PermissionScope.TEAM:
-            team_exists = exists(
-                select(CustomerGroupAssignmentModel.customer_id)
-                .join(
-                    UserGroupModel,
-                    UserGroupModel.group_id == CustomerGroupAssignmentModel.group_id,
-                )
-                .where(
-                    CustomerGroupAssignmentModel.customer_id == CustomerModel.id,
-                    UserGroupModel.user_id == actor_id,
-                )
-            )
             return stmt.where(
                 or_(
                     CustomerModel.owner_user_id == actor_id,
-                    team_exists,
+                    self._is_team_assigned(actor_id),
                 )
             )
 
@@ -91,7 +103,15 @@ class SqlAlchemyCustomerRepository:
         tenant_id: UUID,
         scope: PermissionScope,
     ) -> CustomerPage:
-        stmt = select(CustomerModel)
+        is_owner = CustomerModel.owner_user_id == actor_id
+        is_assigned = self._is_assigned(actor_id)
+        is_team_assigned = self._is_team_assigned(actor_id)
+        stmt = select(
+            CustomerModel,
+            is_owner.label("is_owner"),
+            is_assigned.label("is_assigned"),
+            is_team_assigned.label("is_team_assigned"),
+        )
         stmt = self._apply_scope(stmt, actor_id=actor_id, tenant_id=tenant_id, scope=scope)
 
         if not criteria.show_deleted:
@@ -127,9 +147,19 @@ class SqlAlchemyCustomerRepository:
             .limit(criteria.page_size)
         )
 
-        rows = (await self.session.scalars(stmt)).all()
+        rows = (await self.session.execute(stmt)).all()
         return CustomerPage(
-            items=[self._to_domain(row) for row in rows],
+            items=[
+                CustomerSearchItem(
+                    customer=self._to_domain(row),
+                    access=CustomerAccessFacts(
+                        is_owner=bool(row_is_owner),
+                        is_assigned=bool(row_is_assigned),
+                        is_team_assigned=bool(row_is_team_assigned),
+                    ),
+                )
+                for row, row_is_owner, row_is_assigned, row_is_team_assigned in rows
+            ],
             total=total,
             page=criteria.page,
             page_size=criteria.page_size,
