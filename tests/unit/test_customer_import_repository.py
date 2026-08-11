@@ -16,12 +16,13 @@ class FailingSession:
         self.add_calls = 0
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.flush_calls = 0
 
     def add_all(self, instances: list[object]) -> None:
         self.add_calls += 1
 
-    async def commit(self) -> None:
-        self.commit_calls += 1
+    async def flush(self) -> None:
+        self.flush_calls += 1
         raise IntegrityError("forced", {}, Exception("forced row 3 failure"))
 
     async def rollback(self) -> None:
@@ -57,7 +58,7 @@ def customer(code: str) -> Customer:
 
 
 @pytest.mark.asyncio
-async def test_create_many_rolls_back_whole_batch_on_persistence_failure() -> None:
+async def test_create_many_stages_whole_batch_without_committing() -> None:
     session = FailingSession()
     repository = SqlAlchemyCustomerRepository(cast(AsyncSession, cast(Any, session)))
 
@@ -65,5 +66,6 @@ async def test_create_many_rolls_back_whole_batch_on_persistence_failure() -> No
         await repository.create_many([customer("A100"), customer("A101"), customer("A102")])
 
     assert session.add_calls == 3
-    assert session.commit_calls == 1
-    assert session.rollback_calls == 1
+    assert session.flush_calls == 1
+    assert session.commit_calls == 0
+    assert session.rollback_calls == 0

@@ -1,15 +1,17 @@
 from asyncio import run
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from app.core.config import settings
 from app.infrastructure.database.base import Base
+from app.modules.audit.infrastructure import models as audit_models  # noqa: F401
 
 # Import models so metadata contains all tables.
 from app.modules.auth.infrastructure import models as auth_models  # noqa: F401
+from app.modules.customer_pos.infrastructure import models as customer_po_models  # noqa: F401
 from app.modules.customers.infrastructure import models as customer_models  # noqa: F401
 from app.modules.iam.infrastructure import models as iam_models  # noqa: F401
 

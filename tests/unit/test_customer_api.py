@@ -47,7 +47,9 @@ class FakeCustomerUseCases:
             1,
         )
 
-    async def import_customers(self, rows: list[Any], actor: CurrentUser) -> int:
+    async def import_customers(
+        self, rows: list[Any], actor: CurrentUser, audit_context: object | None = None
+    ) -> int:
         if self.import_error:
             raise self.import_error
         return len(rows)

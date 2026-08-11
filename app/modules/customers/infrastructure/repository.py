@@ -316,9 +316,8 @@ class SqlAlchemyCustomerRepository:
     async def create(self, customer: Customer) -> Customer:
         bp = self._add(customer)
         try:
-            await self.session.commit()
+            await self.session.flush()
         except IntegrityError as exc:
-            await self.session.rollback()
             raise EntityConflict("Business partner code already exists in this tenant") from exc
         await self.session.refresh(bp)
         return self._to_domain(bp)
@@ -327,9 +326,8 @@ class SqlAlchemyCustomerRepository:
         for customer in customers:
             self._add(customer)
         try:
-            await self.session.commit()
+            await self.session.flush()
         except IntegrityError as exc:
-            await self.session.rollback()
             raise EntityConflict("One or more business partner records conflict") from exc
 
     async def update(
@@ -363,9 +361,8 @@ class SqlAlchemyCustomerRepository:
             )
         ).scalar_one_or_none()
         if row is None:
-            await self.session.rollback()
             raise VersionConflict("Customer was modified by another user")
-        await self.session.commit()
+        await self.session.flush()
         return await self.get_by_id(
             customer_id, actor_id=actor_id, tenant_id=tenant_id, scope=scope
         )
@@ -379,7 +376,7 @@ class SqlAlchemyCustomerRepository:
         tenant_id: UUID,
         scope: PermissionScope,
         restore: bool,
-    ) -> bool:
+    ) -> Customer | None:
         visible = await self.get_by_id(
             customer_id, actor_id=actor_id, tenant_id=tenant_id, scope=scope, include_deleted=True
         )
@@ -388,7 +385,7 @@ class SqlAlchemyCustomerRepository:
             or (restore and visible.deleted_at is None)
             or (not restore and visible.deleted_at is not None)
         ):
-            return False
+            return None
         now = datetime.now(UTC)
         bumped = await self.session.execute(
             update(BusinessPartnerModel)
@@ -400,7 +397,6 @@ class SqlAlchemyCustomerRepository:
             .values(row_version=BusinessPartnerModel.row_version + 1, updated_at=now)
         )
         if cast(Any, bumped).rowcount == 0:
-            await self.session.rollback()
             raise VersionConflict("Customer was modified by another user")
         await self.session.execute(
             update(PartnerRoleModel)
@@ -415,8 +411,14 @@ class SqlAlchemyCustomerRepository:
                 updated_at=now,
             )
         )
-        await self.session.commit()
-        return True
+        await self.session.flush()
+        return await self.get_by_id(
+            customer_id,
+            actor_id=actor_id,
+            tenant_id=tenant_id,
+            scope=scope,
+            include_deleted=True,
+        )
 
     async def soft_delete(
         self,
@@ -426,7 +428,7 @@ class SqlAlchemyCustomerRepository:
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> bool:
+    ) -> Customer | None:
         return await self._set_role_deleted(
             customer_id,
             expected_version,
@@ -444,7 +446,7 @@ class SqlAlchemyCustomerRepository:
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> bool:
+    ) -> Customer | None:
         return await self._set_role_deleted(
             customer_id,
             expected_version,

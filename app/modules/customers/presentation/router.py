@@ -1,10 +1,12 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
+from app.api.dependencies.audit import build_audit_context
 from app.api.dependencies.customers import get_customer_use_cases
 from app.api.dependencies.identity import get_current_user
+from app.modules.audit.domain.enums import AuditSource
 from app.modules.customers.application.commands import (
     CreateCustomerCommand,
     CustomerAddressCommand,
@@ -31,6 +33,7 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 @router.post("/import", response_model=CustomerImportResponse)
 async def import_customers(
     request: CustomerImportRequest,
+    http_request: Request,
     actor: Annotated[CurrentUser, Depends(get_current_user)],
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> CustomerImportResponse:
@@ -41,7 +44,11 @@ async def import_customers(
         )
         for index, row in enumerate(request.rows)
     ]
-    total = await use_cases.import_customers(rows, actor)
+    total = await use_cases.import_customers(
+        rows,
+        actor,
+        build_audit_context(actor, http_request, source=AuditSource.IMPORT),
+    )
     return CustomerImportResponse(total=total, imported=total, failed=0)
 
 
@@ -95,6 +102,7 @@ async def get_customer(
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 async def create_customer(
     request: CreateCustomerRequest,
+    http_request: Request,
     actor: Annotated[CurrentUser, Depends(get_current_user)],
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> CustomerResponse:
@@ -109,6 +117,7 @@ async def create_customer(
                 ),
             ),
             actor,
+            build_audit_context(actor, http_request),
         )
     )
 
@@ -117,6 +126,7 @@ async def create_customer(
 async def update_customer(
     customer_id: UUID,
     request: UpdateCustomerRequest,
+    http_request: Request,
     actor: Annotated[CurrentUser, Depends(get_current_user)],
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> CustomerResponse:
@@ -130,6 +140,7 @@ async def update_customer(
                 **payload,
             ),
             actor,
+            build_audit_context(actor, http_request),
         )
     )
 
@@ -138,10 +149,16 @@ async def update_customer(
 async def soft_delete_customer(
     customer_id: UUID,
     request: VersionRequest,
+    http_request: Request,
     actor: Annotated[CurrentUser, Depends(get_current_user)],
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> Response:
-    await use_cases.soft_delete(customer_id, request.expected_version, actor)
+    await use_cases.soft_delete(
+        customer_id,
+        request.expected_version,
+        actor,
+        build_audit_context(actor, http_request),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -149,8 +166,14 @@ async def soft_delete_customer(
 async def restore_customer(
     customer_id: UUID,
     request: VersionRequest,
+    http_request: Request,
     actor: Annotated[CurrentUser, Depends(get_current_user)],
     use_cases: Annotated[CustomerUseCases, Depends(get_customer_use_cases)],
 ) -> Response:
-    await use_cases.restore(customer_id, request.expected_version, actor)
+    await use_cases.restore(
+        customer_id,
+        request.expected_version,
+        actor,
+        build_audit_context(actor, http_request),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

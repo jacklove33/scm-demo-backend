@@ -94,7 +94,7 @@ class CustomerRepository(Protocol):
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> bool: ...
+    ) -> Customer | None: ...
 
     async def restore(
         self,
@@ -104,4 +104,4 @@ class CustomerRepository(Protocol):
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> bool: ...
+    ) -> Customer | None: ...

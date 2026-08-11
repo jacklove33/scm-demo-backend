@@ -90,11 +90,11 @@ class FakeCustomerRepository:
     async def update(self, *args: Any, **kwargs: Any) -> Customer | None:
         return None
 
-    async def soft_delete(self, *args: Any, **kwargs: Any) -> bool:
-        return False
+    async def soft_delete(self, *args: Any, **kwargs: Any) -> Customer | None:
+        return None
 
-    async def restore(self, *args: Any, **kwargs: Any) -> bool:
-        return False
+    async def restore(self, *args: Any, **kwargs: Any) -> Customer | None:
+        return None
 
 
 def make_user(permission_code: str, scope: PermissionScope) -> CurrentUser:

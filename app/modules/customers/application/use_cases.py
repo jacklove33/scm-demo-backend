@@ -10,6 +10,10 @@ from app.core.exceptions import (
     PermissionDenied,
     ValidationFailure,
 )
+from app.modules.audit.application.audit_writer import AuditWriter
+from app.modules.audit.application.diff_service import AuditDiffService
+from app.modules.audit.domain.entities import AuditContext
+from app.modules.audit.domain.enums import AuditAction
 from app.modules.customers.application.capabilities import CustomerCapabilityPolicy
 from app.modules.customers.application.commands import (
     CreateCustomerCommand,
@@ -23,6 +27,7 @@ from app.modules.customers.domain.repository import (
     CustomerRepository,
     CustomerSearchCriteria,
 )
+from app.shared.application.unit_of_work import UnitOfWork
 from app.shared.domain.current_user import CurrentUser
 
 
@@ -39,9 +44,15 @@ class CustomerUseCases:
         self,
         repository: CustomerRepository,
         capability_policy: CustomerCapabilityPolicy | None = None,
+        audit_writer: AuditWriter | None = None,
+        audit_diff: AuditDiffService | None = None,
+        unit_of_work: UnitOfWork | None = None,
     ) -> None:
         self.repository = repository
         self.capability_policy = capability_policy or CustomerCapabilityPolicy()
+        self.audit_writer = audit_writer
+        self.audit_diff = audit_diff or AuditDiffService()
+        self.unit_of_work = unit_of_work
 
     async def search(
         self,
@@ -86,7 +97,12 @@ class CustomerUseCases:
             customer, self.capability_policy.evaluate(customer, access, actor)
         )
 
-    async def create(self, command: CreateCustomerCommand, actor: CurrentUser) -> CustomerDTO:
+    async def create(
+        self,
+        command: CreateCustomerCommand,
+        actor: CurrentUser,
+        audit_context: AuditContext | None = None,
+    ) -> CustomerDTO:
         self._require(actor, "customers.create")
 
         owner_user_id = command.owner_user_id
@@ -126,7 +142,18 @@ class CustomerUseCases:
             updated_at=now,
             addresses=addresses,
         )
-        created = await self.repository.create(customer)
+        try:
+            created = await self.repository.create(customer)
+            await self._write_customer_audit(
+                context=audit_context,
+                action=AuditAction.CREATE,
+                before=None,
+                after=created,
+            )
+            await self._commit()
+        except Exception:
+            await self._rollback()
+            raise
         access = CustomerAccessFacts(
             is_owner=created.owner_user_id == actor.user_id,
             is_assigned=False,
@@ -137,7 +164,10 @@ class CustomerUseCases:
         )
 
     async def import_customers(
-        self, rows: list[CustomerImportRowCommand], actor: CurrentUser
+        self,
+        rows: list[CustomerImportRowCommand],
+        actor: CurrentUser,
+        audit_context: AuditContext | None = None,
     ) -> int:
         self._require(actor, "customers.create")
         if not rows or len(rows) > self.MAX_IMPORT_ROWS:
@@ -224,9 +254,22 @@ class CustomerUseCases:
         if errors:
             self._raise_import_errors(errors)
 
-        await self.repository.create_many(
-            [self._import_row_to_customer(row, actor) for row in normalized]
-        )
+        customers = [self._import_row_to_customer(row, actor) for row in normalized]
+        batch_id = uuid4()
+        try:
+            await self.repository.create_many(customers)
+            for customer in customers:
+                await self._write_customer_audit(
+                    context=audit_context,
+                    action=AuditAction.IMPORT,
+                    before=None,
+                    after=customer,
+                    batch_id=batch_id,
+                )
+            await self._commit()
+        except Exception:
+            await self._rollback()
+            raise
         return len(normalized)
 
     @staticmethod
@@ -360,42 +403,58 @@ class CustomerUseCases:
             addresses=(address,),
         )
 
-    async def update(self, command: UpdateCustomerCommand, actor: CurrentUser) -> CustomerDTO:
+    async def update(
+        self,
+        command: UpdateCustomerCommand,
+        actor: CurrentUser,
+        audit_context: AuditContext | None = None,
+    ) -> CustomerDTO:
         self._require(actor, "customers.update")
         scope = actor.scope_for("customers.update")
 
         owner_user_id = command.owner_user_id
-        if owner_user_id is not None and not actor.can("customers.assign_owner"):
-            # Do not silently allow changing ownership through the generic update API.
-            existing = await self.repository.get_by_id(
-                command.customer_id,
-                actor_id=actor.user_id,
-                tenant_id=actor.tenant_id,
-                scope=scope,
-            )
-            if existing is None:
-                raise EntityNotFound("Customer not found")
-            if existing.owner_user_id != owner_user_id:
-                raise PermissionDenied("Cannot assign customer owner")
-
-        updated = await self.repository.update(
+        existing = await self.repository.get_by_id(
             command.customer_id,
-            command.expected_version,
-            {
-                "partner_name": Customer.normalize_name(command.customer_name),
-                "tax_id": command.tax_id,
-                "country_code": command.country_code,
-                "currency_code": command.currency_code,
-                "payment_term_id": command.payment_term_id,
-                "owner_user_id": owner_user_id,
-                "status": command.status,
-            },
             actor_id=actor.user_id,
             tenant_id=actor.tenant_id,
             scope=scope,
         )
-        if updated is None:
-            raise EntityNotFound("Customer not found or outside allowed scope")
+        if existing is None:
+            raise EntityNotFound("Customer not found")
+        if owner_user_id is not None and not actor.can("customers.assign_owner"):
+            # Do not silently allow changing ownership through the generic update API.
+            if existing.owner_user_id != owner_user_id:
+                raise PermissionDenied("Cannot assign customer owner")
+
+        try:
+            updated = await self.repository.update(
+                command.customer_id,
+                command.expected_version,
+                {
+                    "partner_name": Customer.normalize_name(command.customer_name),
+                    "tax_id": command.tax_id,
+                    "country_code": command.country_code,
+                    "currency_code": command.currency_code,
+                    "payment_term_id": command.payment_term_id,
+                    "owner_user_id": owner_user_id,
+                    "status": command.status,
+                },
+                actor_id=actor.user_id,
+                tenant_id=actor.tenant_id,
+                scope=scope,
+            )
+            if updated is None:
+                raise EntityNotFound("Customer not found or outside allowed scope")
+            await self._write_customer_audit(
+                context=audit_context,
+                action=AuditAction.UPDATE,
+                before=existing,
+                after=updated,
+            )
+            await self._commit()
+        except Exception:
+            await self._rollback()
+            raise
 
         access = await self.repository.get_access_facts(
             updated.id, actor_id=actor.user_id, tenant_id=actor.tenant_id
@@ -409,38 +468,105 @@ class CustomerUseCases:
         customer_id: UUID,
         expected_version: int,
         actor: CurrentUser,
+        audit_context: AuditContext | None = None,
     ) -> None:
         self._require(actor, "customers.delete")
         scope = actor.scope_for("customers.delete")
 
-        changed = await self.repository.soft_delete(
-            customer_id,
-            expected_version,
-            actor_id=actor.user_id,
-            tenant_id=actor.tenant_id,
-            scope=scope,
+        before = await self.repository.get_by_id(
+            customer_id, actor_id=actor.user_id, tenant_id=actor.tenant_id, scope=scope
         )
-        if not changed:
+        if before is None:
             raise EntityNotFound("Customer not found or outside allowed scope")
+        try:
+            changed = await self.repository.soft_delete(
+                customer_id,
+                expected_version,
+                actor_id=actor.user_id,
+                tenant_id=actor.tenant_id,
+                scope=scope,
+            )
+            if changed is None:
+                raise EntityNotFound("Customer not found or outside allowed scope")
+            await self._write_customer_audit(
+                context=audit_context, action=AuditAction.DELETE, before=before, after=changed
+            )
+            await self._commit()
+        except Exception:
+            await self._rollback()
+            raise
 
     async def restore(
         self,
         customer_id: UUID,
         expected_version: int,
         actor: CurrentUser,
+        audit_context: AuditContext | None = None,
     ) -> None:
         self._require(actor, "customers.restore")
         scope = actor.scope_for("customers.restore")
 
-        changed = await self.repository.restore(
+        before = await self.repository.get_by_id(
             customer_id,
-            expected_version,
             actor_id=actor.user_id,
             tenant_id=actor.tenant_id,
             scope=scope,
+            include_deleted=True,
         )
-        if not changed:
+        if before is None:
             raise EntityNotFound("Customer not found or outside allowed scope")
+        try:
+            changed = await self.repository.restore(
+                customer_id,
+                expected_version,
+                actor_id=actor.user_id,
+                tenant_id=actor.tenant_id,
+                scope=scope,
+            )
+            if changed is None:
+                raise EntityNotFound("Customer not found or outside allowed scope")
+            await self._write_customer_audit(
+                context=audit_context, action=AuditAction.RESTORE, before=before, after=changed
+            )
+            await self._commit()
+        except Exception:
+            await self._rollback()
+            raise
+
+    async def _write_customer_audit(
+        self,
+        *,
+        context: AuditContext | None,
+        action: AuditAction,
+        before: Customer | None,
+        after: Customer,
+        batch_id: UUID | None = None,
+    ) -> None:
+        if self.audit_writer is None or context is None:
+            return
+        changes = self.audit_diff.diff(
+            self.audit_diff.customer_snapshot(before) if before else None,
+            self.audit_diff.customer_snapshot(after),
+        )
+        await self.audit_writer.write_event(
+            context=context,
+            action=action,
+            module="CUSTOMER",
+            entity_type="CUSTOMER",
+            entity_id=after.id,
+            entity_code=after.customer_code,
+            entity_display_name=after.customer_name,
+            changes=changes,
+            batch_id=batch_id,
+        )
+
+    async def _commit(self) -> None:
+        if self.unit_of_work:
+            await self.unit_of_work.commit()
+
+    async def _rollback(self) -> None:
+        if self.unit_of_work:
+            await self.unit_of_work.rollback()
 
     @staticmethod
     def _require(actor: CurrentUser, permission_code: str) -> None:

@@ -7,15 +7,15 @@ from app.infrastructure.database.session import get_session
 from app.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from app.modules.audit.application.audit_writer import AuditWriter
 from app.modules.audit.infrastructure.repository import SqlAlchemyAuditRepository
-from app.modules.customers.application.use_cases import CustomerUseCases
-from app.modules.customers.infrastructure.repository import SqlAlchemyCustomerRepository
+from app.modules.customer_pos.application.use_cases import CustomerPoUseCases
+from app.modules.customer_pos.infrastructure.repository import SqlAlchemyCustomerPoRepository
 
 
-async def get_customer_use_cases(
+async def get_customer_po_use_cases(
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> CustomerUseCases:
-    return CustomerUseCases(
-        SqlAlchemyCustomerRepository(session),
-        audit_writer=AuditWriter(SqlAlchemyAuditRepository(session)),
-        unit_of_work=SqlAlchemyUnitOfWork(session),
+) -> CustomerPoUseCases:
+    return CustomerPoUseCases(
+        SqlAlchemyCustomerPoRepository(session),
+        AuditWriter(SqlAlchemyAuditRepository(session)),
+        SqlAlchemyUnitOfWork(session),
     )
