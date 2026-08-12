@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -13,6 +14,10 @@ class CustomerSearchCriteria:
     customer_code: str | None = None
     customer_name_prefix: str | None = None
     status: str | None = None
+    created_at_from: datetime | None = None
+    created_at_to_exclusive: datetime | None = None
+    updated_at_from: datetime | None = None
+    updated_at_to_exclusive: datetime | None = None
     show_deleted: bool = False
     sort_field: str = "created_at"
     sort_direction: str = "desc"

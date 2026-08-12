@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     jwt_audience: str = "authenticated"
     access_token_expire_minutes: int = Field(default=15, ge=1)
     refresh_token_expire_days: int = Field(default=14, ge=1)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_format: Literal["json", "console"] = "console"
+    slow_request_threshold_ms: int = Field(default=1000, ge=1)
+    sqlalchemy_echo: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -193,6 +193,14 @@ class SqlAlchemyCustomerRepository:
             )
         if criteria.status:
             stmt = stmt.where(BusinessPartnerModel.status == criteria.status)
+        if criteria.created_at_from:
+            stmt = stmt.where(BusinessPartnerModel.created_at >= criteria.created_at_from)
+        if criteria.created_at_to_exclusive:
+            stmt = stmt.where(BusinessPartnerModel.created_at < criteria.created_at_to_exclusive)
+        if criteria.updated_at_from:
+            stmt = stmt.where(BusinessPartnerModel.updated_at >= criteria.updated_at_from)
+        if criteria.updated_at_to_exclusive:
+            stmt = stmt.where(BusinessPartnerModel.updated_at < criteria.updated_at_to_exclusive)
         total = int(
             (
                 await self.session.scalar(

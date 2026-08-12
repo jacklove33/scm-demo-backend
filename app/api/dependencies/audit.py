@@ -28,7 +28,8 @@ async def get_audit_use_cases(
 def build_audit_context(
     actor: CurrentUser, request: Request, *, source: AuditSource = AuditSource.API
 ) -> AuditContext:
-    correlation_id = request.headers.get("X-Correlation-ID") or str(uuid4())
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+    correlation_id = getattr(request.state, "correlation_id", None) or request_id
     client_host = request.client.host if request.client else None
     return AuditContext(
         tenant_id=actor.tenant_id,
@@ -38,7 +39,7 @@ def build_audit_context(
         source=source,
         actor_type=AuditActorType.USER,
         correlation_id=correlation_id[:100],
-        request_id=(request.headers.get("X-Request-ID") or "")[:100] or None,
+        request_id=request_id[:100],
         request_method=request.method[:10],
         request_path=request.url.path[:500],
         ip_address=client_host,

@@ -45,6 +45,8 @@ class BusinessPartnerModel(Base):
             name="fk_business_partners_tenant_payment_term",
         ),
         Index("ix_business_partners_tenant_owner", "tenant_id", "owner_user_id"),
+        Index("ix_business_partners_tenant_created_at", "tenant_id", "created_at"),
+        Index("ix_business_partners_tenant_updated_at", "tenant_id", "updated_at"),
         Index("ix_business_partners_tenant_status", "tenant_id", "status", "deleted_at"),
     )
 

@@ -9,6 +9,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging
+from app.core.logging_middleware import LoggingMiddleware
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("Application started")
     yield
+    logger.info("Application shutting down")
     logger.info("Application stopped")
 
 
@@ -39,6 +41,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(LoggingMiddleware)
 
 register_error_handlers(app)
 

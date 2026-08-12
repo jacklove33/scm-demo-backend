@@ -20,9 +20,13 @@ from app.shared.domain.current_user import CurrentUser
 class FakeCustomerUseCases:
     import_error: Exception | None = None
 
+    def __init__(self) -> None:
+        self.criteria: Any = None
+
     async def search(
         self, criteria: Any, actor: CurrentUser
     ) -> tuple[list[CustomerSearchDTO], int]:
+        self.criteria = criteria
         now = datetime.now(UTC)
         return (
             [
@@ -70,6 +74,13 @@ async def override_customer_use_cases() -> FakeCustomerUseCases:
     return FakeCustomerUseCases()
 
 
+def fake_override(fake: FakeCustomerUseCases) -> Any:
+    async def override() -> FakeCustomerUseCases:
+        return fake
+
+    return override
+
+
 def test_search_customers_serializes_row_capabilities() -> None:
     app.dependency_overrides[get_current_user] = override_current_user
     app.dependency_overrides[get_customer_use_cases] = override_customer_use_cases
@@ -85,6 +96,77 @@ def test_search_customers_serializes_row_capabilities() -> None:
         "restore": False,
         "assign_owner": False,
     }
+
+
+def test_customer_date_filters_use_utc_half_open_boundaries_and_can_be_combined() -> None:
+    fake = FakeCustomerUseCases()
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_customer_use_cases] = lambda: fake
+    try:
+        response = TestClient(app).get(
+            "/api/v1/customers",
+            params={
+                "created_date_from": "2026-09-01",
+                "created_date_to": "2026-09-10",
+                "updated_date_from": "2026-09-05",
+                "updated_date_to": "2026-09-12",
+                "customer_code": "ABC",
+                "status": "ACTIVE",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.criteria.created_at_from == datetime(2026, 9, 1, tzinfo=UTC)
+    assert fake.criteria.created_at_to_exclusive == datetime(2026, 9, 11, tzinfo=UTC)
+    assert fake.criteria.updated_at_from == datetime(2026, 9, 5, tzinfo=UTC)
+    assert fake.criteria.updated_at_to_exclusive == datetime(2026, 9, 13, tzinfo=UTC)
+    assert fake.criteria.customer_code == "ABC"
+    assert fake.criteria.status == "ACTIVE"
+
+
+def test_customer_date_filters_support_each_one_sided_boundary() -> None:
+    expected = {
+        "created_date_from": ("created_at_from", datetime(2026, 9, 1, tzinfo=UTC)),
+        "created_date_to": ("created_at_to_exclusive", datetime(2026, 9, 2, tzinfo=UTC)),
+        "updated_date_from": ("updated_at_from", datetime(2026, 9, 1, tzinfo=UTC)),
+        "updated_date_to": ("updated_at_to_exclusive", datetime(2026, 9, 2, tzinfo=UTC)),
+    }
+    for parameter, (field, boundary) in expected.items():
+        fake = FakeCustomerUseCases()
+
+        app.dependency_overrides[get_current_user] = override_current_user
+        app.dependency_overrides[get_customer_use_cases] = fake_override(fake)
+        try:
+            response = TestClient(app).get("/api/v1/customers", params={parameter: "2026-09-01"})
+        finally:
+            app.dependency_overrides.clear()
+        assert response.status_code == 200
+        assert getattr(fake.criteria, field) == boundary
+
+
+def test_customer_date_range_validation_errors_have_specific_codes() -> None:
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_customer_use_cases] = override_customer_use_cases
+    try:
+        invalid = TestClient(app).get(
+            "/api/v1/customers?created_date_from=2026-09-10&created_date_to=2026-09-01"
+        )
+        too_large = TestClient(app).get(
+            "/api/v1/customers?updated_date_from=2026-09-01&updated_date_to=2026-09-15"
+        )
+        fourteen_days = TestClient(app).get(
+            "/api/v1/customers?created_date_from=2026-09-01&created_date_to=2026-09-14"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "INVALID_DATE_RANGE"
+    assert too_large.status_code == 422
+    assert too_large.json()["error"]["code"] == "DATE_RANGE_TOO_LARGE"
+    assert fourteen_days.status_code == 200
 
 
 def valid_import_body() -> dict[str, object]:

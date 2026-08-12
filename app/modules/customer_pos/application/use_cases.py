@@ -1,3 +1,4 @@
+import logging
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -14,7 +15,7 @@ from app.core.exceptions import (
 )
 from app.modules.audit.application.audit_writer import AuditWriter
 from app.modules.audit.application.diff_service import AuditDiffService, AuditField
-from app.modules.audit.domain.entities import AuditContext
+from app.modules.audit.domain.entities import AuditContext, JsonValue
 from app.modules.audit.domain.enums import AuditAction
 from app.modules.customer_pos.application.capabilities import (
     CustomerPoCapabilities,
@@ -27,6 +28,7 @@ from app.modules.customer_pos.application.commands import (
     CustomerPoLineCommand,
     UpdateCustomerPoCommand,
 )
+from app.modules.customer_pos.application.event_writer import CustomerPoEventWriter
 from app.modules.customer_pos.domain.entities import (
     CustomerPoLine,
     CustomerPoStatusEvent,
@@ -38,6 +40,12 @@ from app.modules.customer_pos.domain.enums import (
     CustomerPoStatusEventType,
     CustomerPoStatusTransitions,
 )
+from app.modules.customer_pos.domain.events import (
+    CustomerPoEventCategory,
+    CustomerPoEventPage,
+    CustomerPoEventRepository,
+    CustomerPoEventType,
+)
 from app.modules.customer_pos.domain.repository import (
     CustomerPoPage,
     CustomerPoRepository,
@@ -46,13 +54,21 @@ from app.modules.customer_pos.domain.repository import (
 from app.shared.application.unit_of_work import UnitOfWork
 from app.shared.domain.current_user import CurrentUser
 
+logger = logging.getLogger(__name__)
+
 
 class CustomerPoUseCases:
     def __init__(
-        self, repository: CustomerPoRepository, audit_writer: AuditWriter, unit_of_work: UnitOfWork
+        self,
+        repository: CustomerPoRepository,
+        audit_writer: AuditWriter,
+        event_repository: CustomerPoEventRepository,
+        unit_of_work: UnitOfWork,
     ) -> None:
         self.repository = repository
         self.audit_writer = audit_writer
+        self.event_repository = event_repository
+        self.event_writer = CustomerPoEventWriter(event_repository)
         self.unit_of_work = unit_of_work
         self.diff = AuditDiffService()
 
@@ -165,8 +181,26 @@ class CustomerPoUseCases:
         )
         try:
             created = await self.repository.create(po, event)
+            await self.event_writer.write(
+                tenant_id=created.tenant_id,
+                customer_po_id=created.id,
+                event_type=CustomerPoEventType.CREATE,
+                context=context,
+                title="Customer PO created",
+                description=f"PO {created.customer_po_number} was created.",
+                metadata={"source": created.source.value},
+            )
             await self._audit(context, AuditAction.CREATE, None, created)
             await self.unit_of_work.commit()
+            logger.info(
+                "Customer PO created",
+                extra={
+                    "business_module": "customer_po",
+                    "entity_type": "customer_po",
+                    "entity_id": str(created.id),
+                    "entity_code": created.customer_po_number,
+                },
+            )
         except IntegrityError as error:
             await self.unit_of_work.rollback()
             raise EntityConflict("Duplicate Customer PO or line number") from error
@@ -216,8 +250,24 @@ class CustomerPoUseCases:
             changed = await self.repository.update(after, command.expected_version)
             if changed is None:
                 raise VersionConflict("Customer PO version conflict")
+            await self.event_writer.write(
+                tenant_id=changed.tenant_id,
+                customer_po_id=changed.id,
+                event_type=CustomerPoEventType.UPDATE,
+                context=context,
+                title="Customer PO updated",
+            )
             await self._audit(context, AuditAction.UPDATE, before, changed)
             await self.unit_of_work.commit()
+            logger.info(
+                "Customer PO updated",
+                extra={
+                    "business_module": "customer_po",
+                    "entity_type": "customer_po",
+                    "entity_id": str(changed.id),
+                    "entity_code": changed.customer_po_number,
+                },
+            )
         except IntegrityError as error:
             await self.unit_of_work.rollback()
             raise EntityConflict("Duplicate Customer PO line number") from error
@@ -249,10 +299,36 @@ class CustomerPoUseCases:
             )
             if changed is None:
                 raise VersionConflict("Customer PO version conflict")
+            metadata: dict[str, JsonValue] = {
+                "from_status": before.status.value,
+                "to_status": changed.status.value,
+            }
+            if command.reason:
+                metadata["reason"] = command.reason
+            await self.event_writer.write(
+                tenant_id=changed.tenant_id,
+                customer_po_id=changed.id,
+                event_type=CustomerPoEventType.STATUS_CHANGE,
+                context=context,
+                title="Status changed",
+                description=f"{before.status.value} → {changed.status.value}",
+                metadata=metadata,
+            )
             await self._audit(
                 context, AuditAction.STATUS_CHANGE, before, changed, reason=command.reason
             )
             await self.unit_of_work.commit()
+            logger.info(
+                "Customer PO status changed",
+                extra={
+                    "business_module": "customer_po",
+                    "entity_type": "customer_po",
+                    "entity_id": str(changed.id),
+                    "entity_code": changed.customer_po_number,
+                    "from_status": before.status.value,
+                    "to_status": changed.status.value,
+                },
+            )
         except Exception:
             await self.unit_of_work.rollback()
             raise
@@ -266,8 +342,24 @@ class CustomerPoUseCases:
             after = await self.repository.soft_delete(po_id, expected_version, actor.user_id)
             if after is None:
                 raise VersionConflict("Customer PO version conflict")
+            await self.event_writer.write(
+                tenant_id=after.tenant_id,
+                customer_po_id=after.id,
+                event_type=CustomerPoEventType.SOFT_DELETE,
+                context=context,
+                title="Customer PO deleted",
+            )
             await self._audit(context, AuditAction.DELETE, before, after)
             await self.unit_of_work.commit()
+            logger.info(
+                "Customer PO deleted",
+                extra={
+                    "business_module": "customer_po",
+                    "entity_type": "customer_po",
+                    "entity_id": str(after.id),
+                    "entity_code": after.customer_po_number,
+                },
+            )
         except Exception:
             await self.unit_of_work.rollback()
             raise
@@ -289,8 +381,24 @@ class CustomerPoUseCases:
             after = await self.repository.restore(po_id, expected_version, actor.user_id)
             if after is None:
                 raise VersionConflict("Customer PO version conflict")
+            await self.event_writer.write(
+                tenant_id=after.tenant_id,
+                customer_po_id=after.id,
+                event_type=CustomerPoEventType.RESTORE,
+                context=context,
+                title="Customer PO restored",
+            )
             await self._audit(context, AuditAction.RESTORE, po, after)
             await self.unit_of_work.commit()
+            logger.info(
+                "Customer PO restored",
+                extra={
+                    "business_module": "customer_po",
+                    "entity_type": "customer_po",
+                    "entity_id": str(after.id),
+                    "entity_code": after.customer_po_number,
+                },
+            )
         except Exception:
             await self.unit_of_work.rollback()
             raise
@@ -298,6 +406,21 @@ class CustomerPoUseCases:
     async def status_history(self, po_id: UUID, actor: CurrentUser) -> list[CustomerPoStatusEvent]:
         await self.get(po_id, actor, include_deleted=True)
         return await self.repository.status_history(po_id, actor.tenant_id)
+
+    async def event_timeline(
+        self,
+        po_id: UUID,
+        actor: CurrentUser,
+        *,
+        page: int,
+        page_size: int,
+        event_type: CustomerPoEventType | None = None,
+        category: CustomerPoEventCategory | None = None,
+    ) -> CustomerPoEventPage:
+        await self.get(po_id, actor, include_deleted=True)
+        return await self.event_repository.list_for_po(
+            actor.tenant_id, po_id, page, page_size, event_type, category
+        )
 
     async def _load_for(
         self, po_id: UUID, actor: CurrentUser, permission: str

@@ -185,3 +185,44 @@ class CustomerPoStatusEventModel(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class CustomerPoEventModel(Base):
+    __tablename__ = "customer_po_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "customer_po_id"],
+            ["customer_purchase_orders.tenant_id", "customer_purchase_orders.id"],
+            name="fk_customer_po_events_tenant_po",
+        ),
+        Index(
+            "ix_customer_po_events_tenant_po_time",
+            "tenant_id",
+            "customer_po_id",
+            "occurred_at",
+        ),
+        Index("ix_customer_po_events_tenant_type", "tenant_id", "event_type"),
+        Index("ix_customer_po_events_tenant_category", "tenant_id", "event_category"),
+    )
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    customer_po_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_category: Mapped[str] = mapped_column(String(30), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    actor_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL")
+    )
+    actor_display_name: Mapped[str | None] = mapped_column(String(160))
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(100))
+    request_id: Mapped[str | None] = mapped_column(String(100))
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

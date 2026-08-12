@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from app.modules.customers.presentation.schemas import (
     UpdateCustomerRequest,
     VersionRequest,
 )
+from app.shared.application.date_ranges import validate_date_range
 from app.shared.domain.current_user import CurrentUser
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -61,6 +63,10 @@ async def search_customers(
     customer_code: str | None = Query(None, max_length=80),
     customer_name_prefix: str | None = Query(None, max_length=240),
     customer_status: str | None = Query(None, alias="status", max_length=30),
+    created_date_from: date | None = None,
+    created_date_to: date | None = None,
+    updated_date_from: date | None = None,
+    updated_date_to: date | None = None,
     show_deleted: bool = False,
     sort_field: Literal[
         "customer_code",
@@ -71,6 +77,12 @@ async def search_customers(
     ] = "created_at",
     sort_direction: Literal["asc", "desc"] = "desc",
 ) -> CustomerListResponse:
+    created = validate_date_range(
+        created_date_from, created_date_to, max_days=14, field_name="created"
+    )
+    updated = validate_date_range(
+        updated_date_from, updated_date_to, max_days=14, field_name="updated"
+    )
     items, total = await use_cases.search(
         CustomerSearchCriteria(
             page=page,
@@ -78,6 +90,10 @@ async def search_customers(
             customer_code=customer_code,
             customer_name_prefix=customer_name_prefix,
             status=customer_status,
+            created_at_from=created.from_inclusive,
+            created_at_to_exclusive=created.to_exclusive,
+            updated_at_from=updated.from_inclusive,
+            updated_at_to_exclusive=updated.to_exclusive,
             show_deleted=show_deleted,
             sort_field=sort_field,
             sort_direction=sort_direction,

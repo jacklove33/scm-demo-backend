@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -29,6 +30,8 @@ from app.modules.customers.domain.repository import (
 )
 from app.shared.application.unit_of_work import UnitOfWork
 from app.shared.domain.current_user import CurrentUser
+
+logger = logging.getLogger(__name__)
 
 
 class CustomerUseCases:
@@ -151,6 +154,15 @@ class CustomerUseCases:
                 after=created,
             )
             await self._commit()
+            logger.info(
+                "Customer created",
+                extra={
+                    "business_module": "customer",
+                    "entity_type": "customer",
+                    "entity_id": str(created.id),
+                    "entity_code": created.customer_code,
+                },
+            )
         except Exception:
             await self._rollback()
             raise
@@ -267,6 +279,10 @@ class CustomerUseCases:
                     batch_id=batch_id,
                 )
             await self._commit()
+            logger.info(
+                "Customer import completed",
+                extra={"business_module": "customer", "imported_count": len(customers)},
+            )
         except Exception:
             await self._rollback()
             raise
@@ -452,6 +468,15 @@ class CustomerUseCases:
                 after=updated,
             )
             await self._commit()
+            logger.info(
+                "Customer updated",
+                extra={
+                    "business_module": "customer",
+                    "entity_type": "customer",
+                    "entity_id": str(updated.id),
+                    "entity_code": updated.customer_code,
+                },
+            )
         except Exception:
             await self._rollback()
             raise
@@ -492,6 +517,15 @@ class CustomerUseCases:
                 context=audit_context, action=AuditAction.DELETE, before=before, after=changed
             )
             await self._commit()
+            logger.info(
+                "Customer deactivated",
+                extra={
+                    "business_module": "customer",
+                    "entity_type": "customer",
+                    "entity_id": str(changed.id),
+                    "entity_code": changed.customer_code,
+                },
+            )
         except Exception:
             await self._rollback()
             raise
@@ -529,6 +563,15 @@ class CustomerUseCases:
                 context=audit_context, action=AuditAction.RESTORE, before=before, after=changed
             )
             await self._commit()
+            logger.info(
+                "Customer restored",
+                extra={
+                    "business_module": "customer",
+                    "entity_type": "customer",
+                    "entity_id": str(changed.id),
+                    "entity_code": changed.customer_code,
+                },
+            )
         except Exception:
             await self._rollback()
             raise

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -9,6 +10,8 @@ from app.modules.auth.domain.repository import AuthRepository
 from app.modules.auth.infrastructure.jwt_service import JwtService
 from app.modules.auth.infrastructure.password_hasher import PasswordHasher
 from app.modules.auth.infrastructure.refresh_token_service import RefreshTokenService
+
+logger = logging.getLogger(__name__)
 
 
 class AuthUseCases:
@@ -36,10 +39,18 @@ class AuthUseCases:
             and self.password_hasher.verify_password(command.password, identity.password_hash)
         )
         if not valid or identity is None:
+            logger.warning("Authentication failed", extra={"business_module": "auth"})
             raise AuthenticationRequired("Invalid email or password")
 
         raw_refresh, refresh = self._new_refresh_token(identity.profile.id, now)
         await self.repository.create_refresh_token(refresh)
+        logger.info(
+            "User login successful",
+            extra={
+                "business_module": "auth",
+                "user_id": str(identity.profile.id),
+            },
+        )
         return self._token_pair(identity.profile, raw_refresh, now)
 
     async def refresh(self, command: RefreshCommand) -> TokenPairDTO:

@@ -1,0 +1,1 @@
+"""SQL dashboard read models."""

@@ -16,10 +16,13 @@ from app.modules.customer_pos.application.commands import (
 )
 from app.modules.customer_pos.application.use_cases import CustomerPoUseCases
 from app.modules.customer_pos.domain.enums import CustomerPoSource, CustomerPoStatus
+from app.modules.customer_pos.domain.events import CustomerPoEventCategory, CustomerPoEventType
 from app.modules.customer_pos.domain.repository import CustomerPoSearchCriteria
 from app.modules.customer_pos.presentation.schemas import (
     ChangeStatusRequest,
     CreateCustomerPoRequest,
+    CustomerPoEventPageResponse,
+    CustomerPoEventResponse,
     CustomerPoLineRequest,
     CustomerPoListResponse,
     CustomerPoResponse,
@@ -160,6 +163,32 @@ async def customer_po_status_history(
         StatusEventResponse.from_domain(event)
         for event in await use_cases.status_history(customer_po_id, actor)
     ]
+
+
+@router.get("/{customer_po_id}/events", response_model=CustomerPoEventPageResponse)
+async def customer_po_event_timeline(
+    customer_po_id: UUID,
+    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    use_cases: Annotated[CustomerPoUseCases, Depends(get_customer_po_use_cases)],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    event_type: CustomerPoEventType | None = None,
+    category: CustomerPoEventCategory | None = None,
+) -> CustomerPoEventPageResponse:
+    result = await use_cases.event_timeline(
+        customer_po_id,
+        actor,
+        page=page,
+        page_size=page_size,
+        event_type=event_type,
+        category=category,
+    )
+    return CustomerPoEventPageResponse(
+        items=[CustomerPoEventResponse.from_domain(event) for event in result.items],
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+    )
 
 
 @router.post("/{customer_po_id}/soft-delete", status_code=status.HTTP_204_NO_CONTENT)

@@ -4,9 +4,17 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.audit.domain.entities import JsonValue
 from app.modules.customer_pos.application.capabilities import CustomerPoCapabilities
 from app.modules.customer_pos.domain.entities import CustomerPoStatusEvent, CustomerPurchaseOrder
 from app.modules.customer_pos.domain.enums import CustomerPoSource, CustomerPoStatus
+from app.modules.customer_pos.domain.events import (
+    CustomerPoEvent,
+    CustomerPoEventActorType,
+    CustomerPoEventCategory,
+    CustomerPoEventSource,
+    CustomerPoEventType,
+)
 
 
 class CustomerPoLineRequest(BaseModel):
@@ -169,3 +177,31 @@ class StatusEventResponse(BaseModel):
     @classmethod
     def from_domain(cls, event: CustomerPoStatusEvent) -> "StatusEventResponse":
         return cls.model_validate(event, from_attributes=True)
+
+
+class CustomerPoEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    event_type: CustomerPoEventType
+    event_category: CustomerPoEventCategory
+    title: str
+    description: str | None
+    actor_type: CustomerPoEventActorType
+    actor_user_id: UUID | None
+    actor_display_name: str | None
+    source: CustomerPoEventSource
+    correlation_id: str | None
+    request_id: str | None
+    metadata: dict[str, JsonValue]
+    occurred_at: datetime
+
+    @classmethod
+    def from_domain(cls, event: CustomerPoEvent) -> "CustomerPoEventResponse":
+        return cls.model_validate(event, from_attributes=True)
+
+
+class CustomerPoEventPageResponse(BaseModel):
+    items: list[CustomerPoEventResponse]
+    total: int
+    page: int
+    page_size: int
