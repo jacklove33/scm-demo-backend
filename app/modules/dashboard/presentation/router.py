@@ -143,8 +143,11 @@ def customer_response(items: tuple[DimensionItem, ...]) -> CustomerResponse:
 
 
 COUNTRY_NAMES = {
+    "CN": "China",
     "DE": "Germany",
+    "GB": "United Kingdom",
     "JP": "Japan",
+    "KR": "South Korea",
     "SG": "Singapore",
     "TW": "Taiwan",
     "US": "United States",
