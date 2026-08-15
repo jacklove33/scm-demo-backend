@@ -36,8 +36,11 @@ class CustomerPoStatusEventType(StrEnum):
 
 
 class CustomerPoStatusTransitions:
-    _allowed = {
-        CustomerPoStatus.DRAFT: {CustomerPoStatus.RECEIVED, CustomerPoStatus.CANCELLED},
+    _allowed: dict[CustomerPoStatus, set[CustomerPoStatus]] = {
+        CustomerPoStatus.DRAFT: {
+            CustomerPoStatus.RECEIVED,
+            CustomerPoStatus.CANCELLED,
+        },
         CustomerPoStatus.RECEIVED: {
             CustomerPoStatus.VALIDATING,
             CustomerPoStatus.ON_HOLD,
@@ -64,23 +67,78 @@ class CustomerPoStatusTransitions:
             CustomerPoStatus.PROCESSING,
             CustomerPoStatus.CANCELLED,
         },
+
+        # Terminal states
         CustomerPoStatus.CONVERTED: set(),
         CustomerPoStatus.REJECTED: set(),
         CustomerPoStatus.CANCELLED: set(),
     }
 
     @classmethod
-    def require(cls, before: CustomerPoStatus, after: CustomerPoStatus) -> None:
-        if after not in cls._allowed[before]:
-            raise EntityConflict(f"Invalid Customer PO status transition: {before} -> {after}")
+    def allowed(
+        cls,
+        status: CustomerPoStatus,
+    ) -> tuple[CustomerPoStatus, ...]:
+        """
+        Return all valid next statuses.
+
+        This is also used by the API to tell the frontend
+        which status options should be displayed.
+        """
+        return tuple(cls._allowed.get(status, set()))
+
+    @classmethod
+    def can_change(
+        cls,
+        status: CustomerPoStatus,
+    ) -> bool:
+        """
+        True when at least one valid transition exists.
+        """
+        return bool(cls._allowed.get(status))
+
+    @classmethod
+    def require(
+        cls,
+        before: CustomerPoStatus,
+        after: CustomerPoStatus,
+    ) -> None:
+        """
+        Enforce the workflow rule on the server.
+
+        Frontend options are only UI assistance.
+        This method remains the real security/business-rule boundary.
+        """
+        if after not in cls._allowed.get(before, set()):
+            raise EntityConflict(
+                f"Invalid Customer PO status transition: "
+                f"{before.value} -> {after.value}"
+            )
 
     @staticmethod
-    def event_type(after: CustomerPoStatus) -> CustomerPoStatusEventType:
+    def event_type(
+        after: CustomerPoStatus,
+    ) -> CustomerPoStatusEventType:
         return {
-            CustomerPoStatus.VALIDATING: CustomerPoStatusEventType.VALIDATION_STARTED,
-            CustomerPoStatus.VALIDATED: CustomerPoStatusEventType.VALIDATION_PASSED,
-            CustomerPoStatus.ON_HOLD: CustomerPoStatusEventType.PUT_ON_HOLD,
-            CustomerPoStatus.CONVERTED: CustomerPoStatusEventType.CONVERTED,
-            CustomerPoStatus.REJECTED: CustomerPoStatusEventType.REJECTED,
-            CustomerPoStatus.CANCELLED: CustomerPoStatusEventType.CANCELLED,
-        }.get(after, CustomerPoStatusEventType.STATUS_CHANGED)
+            CustomerPoStatus.VALIDATING:
+                CustomerPoStatusEventType.VALIDATION_STARTED,
+
+            CustomerPoStatus.VALIDATED:
+                CustomerPoStatusEventType.VALIDATION_PASSED,
+
+            CustomerPoStatus.ON_HOLD:
+                CustomerPoStatusEventType.PUT_ON_HOLD,
+
+            CustomerPoStatus.CONVERTED:
+                CustomerPoStatusEventType.CONVERTED,
+
+            CustomerPoStatus.REJECTED:
+                CustomerPoStatusEventType.REJECTED,
+
+            CustomerPoStatus.CANCELLED:
+                CustomerPoStatusEventType.CANCELLED,
+
+        }.get(
+            after,
+            CustomerPoStatusEventType.STATUS_CHANGED,
+        )

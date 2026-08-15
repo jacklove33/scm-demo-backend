@@ -88,6 +88,17 @@ class DimensionItem:
     label: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProductItem:
+    product_id: UUID | None
+    product_code: str
+    product_name: str
+    po_count: int
+    ordered_quantity: Decimal
+    percentage: Decimal
+    amount_by_currency: tuple[AmountByCurrency, ...]
+
+
 class DashboardRepository(Protocol):
     async def summary(
         self, filters: CustomerPoDashboardFilter, context: DashboardQueryContext
@@ -107,3 +118,10 @@ class DashboardRepository(Protocol):
         context: DashboardQueryContext,
         limit: int | None = None,
     ) -> tuple[DimensionItem, ...]: ...
+
+    async def products(
+        self,
+        filters: CustomerPoDashboardFilter,
+        context: DashboardQueryContext,
+        limit: int | None = 10,
+    ) -> tuple[ProductItem, ...]: ...

@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "SCM IAM + Customer API"
+    app_name: str = "SCM DEMO 1"
     app_env: Literal["local", "test", "prod"] = "local"
     debug: bool = True
     api_prefix: str = "/api/v1"
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     log_format: Literal["json", "console"] = "console"
     slow_request_threshold_ms: int = Field(default=1000, ge=1)
     sqlalchemy_echo: bool = False
+    aws_region: str = "ap-northeast-1"
+    s3_attachments_bucket: str = ""
+    attachment_max_file_size_bytes: int = Field(default=10_485_760, ge=1)
+    attachment_download_url_expire_seconds: int = Field(default=300, ge=1, le=3600)
 
     model_config = SettingsConfigDict(
         env_file=".env",

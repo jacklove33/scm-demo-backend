@@ -84,6 +84,20 @@ class SourceResponse(BaseModel):
     items: list[SourceItemResponse]
 
 
+class ProductItemResponse(BaseModel):
+    product_id: UUID | None
+    product_code: str
+    product_name: str
+    po_count: int
+    ordered_quantity: Decimal
+    percentage: Decimal
+    amount_by_currency: list[AmountResponse]
+
+
+class ProductResponse(BaseModel):
+    items: list[ProductItemResponse]
+
+
 class CustomerItemResponse(BaseModel):
     customer_id: UUID
     customer_code: str
@@ -137,4 +151,5 @@ class OverviewResponse(BaseModel):
     by_status: StatusResponse
     by_customer: CustomerResponse
     by_source: SourceResponse
+    by_product: ProductResponse
     attention: AttentionResponse

@@ -22,6 +22,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         settings.app_env,
         settings.auth_mode,
     )
+    logger.info(
+        "Attachment storage configured attachments_storage=S3 aws_region=%s s3_bucket=%s",
+        settings.aws_region,
+        settings.s3_attachments_bucket or "NOT_CONFIGURED",
+    )
     logger.info("Application started")
     yield
     logger.info("Application shutting down")

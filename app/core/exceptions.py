@@ -40,3 +40,8 @@ class ValidationFailure(AppError):
 
 class ImportValidationFailure(ValidationFailure):
     code = "IMPORT_VALIDATION_FAILED"
+
+
+class ExternalServiceFailure(AppError):
+    code = "EXTERNAL_SERVICE_ERROR"
+    status_code = 502

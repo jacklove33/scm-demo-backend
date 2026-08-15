@@ -1,0 +1,1 @@
+"""Generic private attachment storage."""

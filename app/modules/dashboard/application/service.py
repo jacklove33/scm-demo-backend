@@ -8,6 +8,7 @@ from app.modules.dashboard.domain.models import (
     DashboardQueryContext,
     DashboardRepository,
     DimensionItem,
+    ProductItem,
     SummaryResult,
     TrendGranularity,
     TrendPoint,
@@ -75,6 +76,15 @@ class CustomerPoDashboardService:
     ) -> tuple[DimensionItem, ...]:
         self.validate(filters)
         return await self.repository.dimension(dimension, filters, self._context(actor), limit)
+
+    async def products(
+        self,
+        filters: CustomerPoDashboardFilter,
+        actor: CurrentUser,
+        limit: int | None = 10,
+    ) -> tuple[ProductItem, ...]:
+        self.validate(filters)
+        return await self.repository.products(filters, self._context(actor), limit)
 
     @staticmethod
     def default_granularity(date_from: date | None, date_to: date | None) -> TrendGranularity:

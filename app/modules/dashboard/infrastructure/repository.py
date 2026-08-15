@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import case, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.customer_pos.infrastructure.models import CustomerPoModel
+from app.modules.customer_pos.infrastructure.models import CustomerPoLineModel, CustomerPoModel
 from app.modules.customers.infrastructure.models import (
     BusinessPartnerModel,
     CustomerGroupAssignmentModel,
@@ -17,6 +17,7 @@ from app.modules.dashboard.domain.models import (
     CustomerPoDashboardFilter,
     DashboardQueryContext,
     DimensionItem,
+    ProductItem,
     SummaryResult,
     TrendGranularity,
     TrendPoint,
@@ -233,4 +234,80 @@ class SqlAlchemyDashboardRepository:
             for key_value, item_rows in merged.items()
         ]
         items.sort(key=lambda item: (-item.count, item.key))
+        return tuple(items[:limit] if limit else items)
+
+    async def products(
+        self,
+        filters: CustomerPoDashboardFilter,
+        context: DashboardQueryContext,
+        limit: int | None = 10,
+    ) -> tuple[ProductItem, ...]:
+        product_code = func.coalesce(
+            CustomerPoLineModel.internal_item_number,
+            CustomerPoLineModel.customer_item_number,
+            CustomerPoLineModel.item_description,
+            "UNSPECIFIED",
+        )
+        product_name = func.coalesce(
+            CustomerPoLineModel.item_description,
+            CustomerPoLineModel.internal_item_number,
+            CustomerPoLineModel.customer_item_number,
+            "Unspecified Product",
+        )
+        currency = func.coalesce(
+            CustomerPoLineModel.currency_code, CustomerPoModel.currency_code, "UNSPECIFIED"
+        )
+        line_amount = func.coalesce(
+            CustomerPoLineModel.line_amount,
+            CustomerPoLineModel.ordered_quantity
+            * func.coalesce(CustomerPoLineModel.unit_price, 0),
+            0,
+        )
+        statement = (
+            self._base(filters, context)
+            .join(
+                CustomerPoLineModel,
+                (CustomerPoLineModel.customer_po_id == CustomerPoModel.id)
+                & (CustomerPoLineModel.tenant_id == CustomerPoModel.tenant_id),
+            )
+            .add_columns(
+                CustomerPoLineModel.product_id.label("product_id"),
+                product_code.label("product_code"),
+                product_name.label("product_name"),
+                currency.label("currency"),
+                func.count(func.distinct(CustomerPoModel.id)).label("po_count"),
+                func.sum(CustomerPoLineModel.ordered_quantity).label("ordered_quantity"),
+                func.sum(line_amount).label("amount"),
+            )
+            .group_by(CustomerPoLineModel.product_id, product_code, product_name, currency)
+        )
+        rows = (await self.session.execute(statement)).all()
+        grouped: dict[tuple[Any, str, str], list[Any]] = defaultdict(list)
+        for row in rows:
+            grouped[(row.product_id, str(row.product_code), str(row.product_name))].append(row)
+        total_associations = sum(
+            sum(int(row.po_count) for row in product_rows)
+            for product_rows in grouped.values()
+        )
+        items = [
+            ProductItem(
+                product_id=product_id,
+                product_code=code,
+                product_name=name,
+                po_count=sum(int(row.po_count) for row in product_rows),
+                ordered_quantity=sum(
+                    (Decimal(str(row.ordered_quantity or 0)) for row in product_rows), Decimal(0)
+                ),
+                percentage=Decimal(0)
+                if total_associations == 0
+                else Decimal(sum(int(row.po_count) for row in product_rows) * 100)
+                / Decimal(total_associations),
+                amount_by_currency=tuple(
+                    AmountByCurrency(str(row.currency), Decimal(str(row.amount or 0)))
+                    for row in product_rows
+                ),
+            )
+            for (product_id, code, name), product_rows in grouped.items()
+        ]
+        items.sort(key=lambda item: (-item.po_count, item.product_code))
         return tuple(items[:limit] if limit else items)

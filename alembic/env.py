@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import settings
 from app.infrastructure.database.base import Base
+from app.modules.attachments.infrastructure import models as attachment_models  # noqa: F401
 from app.modules.audit.infrastructure import models as audit_models  # noqa: F401
 
 # Import models so metadata contains all tables.

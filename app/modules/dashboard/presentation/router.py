@@ -18,6 +18,7 @@ from app.modules.dashboard.domain.models import (
     ATTENTION_RULES,
     CustomerPoDashboardFilter,
     DimensionItem,
+    ProductItem,
     SummaryResult,
     TrendGranularity,
 )
@@ -33,6 +34,8 @@ from app.modules.dashboard.presentation.schemas import (
     DimensionResponse,
     ModulesResponse,
     OverviewResponse,
+    ProductItemResponse,
+    ProductResponse,
     SourceItemResponse,
     SourceResponse,
     StatusItemResponse,
@@ -122,6 +125,12 @@ def source_response(items: tuple[DimensionItem, ...]) -> SourceResponse:
             )
             for item in items
         ]
+    )
+
+
+def product_response(items: tuple[ProductItem, ...]) -> ProductResponse:
+    return ProductResponse(
+        items=[ProductItemResponse.model_validate(item, from_attributes=True) for item in items]
     )
 
 
@@ -327,6 +336,23 @@ async def by_country(
     return country_response(result)
 
 
+@router.get("/customer-pos/by-product", response_model=ProductResponse)
+async def by_product(
+    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[CustomerPoDashboardService, Depends(get_customer_po_dashboard_service)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+    customer_id: UUID | None = None,
+    owner_user_id: UUID | None = None,
+    po_status: Annotated[CustomerPoStatus | None, Query(alias="status")] = None,
+    limit: int = Query(10, ge=1, le=100),
+) -> ProductResponse:
+    result = await service.products(
+        filters(date_from, date_to, customer_id, owner_user_id, po_status), actor, limit
+    )
+    return product_response(result)
+
+
 @router.get("/customer-pos/attention", response_model=AttentionResponse)
 async def attention(
     actor: Annotated[CurrentUser, Depends(get_current_user)],
@@ -360,6 +386,7 @@ async def overview(
     status_items = await service.dimension("status", values, actor)
     source_items = await service.dimension("source", values, actor)
     customer_items = await service.dimension("customer", values, actor, customer_limit)
+    product_items = await service.products(values, actor, None)
     return OverviewResponse(
         summary=summary,
         trend=TrendResponse(
@@ -371,5 +398,6 @@ async def overview(
         by_status=status_response(status_items),
         by_customer=customer_response(customer_items),
         by_source=source_response(source_items),
+        by_product=product_response(product_items),
         attention=attention_response(status_items),
     )

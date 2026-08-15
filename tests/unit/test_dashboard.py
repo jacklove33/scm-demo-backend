@@ -1,6 +1,8 @@
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
@@ -15,12 +17,17 @@ from app.modules.dashboard.domain.models import (
     DashboardQueryContext,
     DashboardRepository,
     DimensionItem,
+    ProductItem,
     SummaryResult,
     TrendGranularity,
     TrendPoint,
 )
 from app.modules.dashboard.infrastructure.repository import SqlAlchemyDashboardRepository
-from app.modules.dashboard.presentation.router import attention_response, summary_response
+from app.modules.dashboard.presentation.router import (
+    attention_response,
+    product_response,
+    summary_response,
+)
 from app.shared.domain.current_user import (
     CurrentUser,
     EffectivePermission,
@@ -76,6 +83,25 @@ class FakeRepository:
         self.calls.append((dimension, values, context))
         return (
             DimensionItem("EDI", 2, Decimal("66.67"), (AmountByCurrency("USD", Decimal("50")),)),
+        )
+
+    async def products(
+        self,
+        values: CustomerPoDashboardFilter,
+        context: DashboardQueryContext,
+        limit: int | None = 10,
+    ) -> tuple[ProductItem, ...]:
+        self.calls.append(("product", values, context))
+        return (
+            ProductItem(
+                None,
+                "P1001",
+                "USB Controller",
+                2,
+                Decimal("12"),
+                Decimal("66.67"),
+                (AmountByCurrency("USD", Decimal("50")),),
+            ),
         )
 
 
@@ -176,6 +202,32 @@ def test_attention_uses_actionable_codes_and_only_reliable_statuses() -> None:
     ]
 
 
+def test_product_response_preserves_decimal_quantity_and_currency_groups() -> None:
+    response = product_response(
+        (
+            ProductItem(
+                None,
+                "P1001",
+                "USB Controller",
+                15,
+                Decimal("1200.5"),
+                Decimal("28.5"),
+                (
+                    AmountByCurrency("EUR", Decimal("520000")),
+                    AmountByCurrency("USD", Decimal("310000")),
+                ),
+            ),
+        )
+    )
+    item = response.items[0]
+    assert item.product_code == "P1001"
+    assert item.ordered_quantity == Decimal("1200.5")
+    assert [(amount.currency, amount.amount) for amount in item.amount_by_currency] == [
+        ("EUR", Decimal("520000")),
+        ("USD", Decimal("310000")),
+    ]
+
+
 def test_repository_base_query_enforces_tenant_scope_dates_and_soft_delete() -> None:
     repository = SqlAlchemyDashboardRepository(cast(Any, object()))
     customer_id = UUID("40000000-0000-0000-0000-000000000001")
@@ -197,3 +249,39 @@ def test_repository_base_query_enforces_tenant_scope_dates_and_soft_delete() -> 
     assert "customer_purchase_orders.customer_id =" in sql
     assert TENANT in compiled.params.values()
     assert customer_id in compiled.params.values()
+
+
+@pytest.mark.asyncio
+async def test_product_repository_aggregates_lines_without_combining_currencies() -> None:
+    rows = [
+        SimpleNamespace(
+            product_id=None,
+            product_code="P1001",
+            product_name="Controller",
+            currency="EUR",
+            po_count=2,
+            ordered_quantity=Decimal("12"),
+            amount=Decimal("500"),
+        ),
+        SimpleNamespace(
+            product_id=None,
+            product_code="P1001",
+            product_name="Controller",
+            currency="USD",
+            po_count=1,
+            ordered_quantity=Decimal("3"),
+            amount=Decimal("200"),
+        ),
+    ]
+    result = SimpleNamespace(all=lambda: rows)
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    repository = SqlAlchemyDashboardRepository(cast(Any, session))
+    items = await repository.products(
+        CustomerPoDashboardFilter(), DashboardQueryContext(TENANT, ACTOR, PermissionScope.ALL)
+    )
+    assert items[0].po_count == 3
+    assert items[0].ordered_quantity == Decimal("15")
+    assert [(amount.currency, amount.amount) for amount in items[0].amount_by_currency] == [
+        ("EUR", Decimal("500")),
+        ("USD", Decimal("200")),
+    ]
