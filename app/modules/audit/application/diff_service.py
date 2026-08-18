@@ -1,10 +1,12 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, datetime
 from uuid import UUID
 
 from app.modules.audit.domain.entities import AuditChange, JsonValue
 from app.modules.audit.domain.enums import AuditChangeType, AuditValueType
 from app.modules.customers.domain.entities import Customer
+from app.modules.products.domain.entities import Product
+from app.modules.suppliers.domain.entities import Supplier
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,56 @@ class AuditDiffService:
                     label, getattr(address, attribute)
                 )
         return fields
+
+    def supplier_snapshot(self, supplier: Supplier) -> dict[str, AuditField]:
+        fields = {
+            "supplier.supplier_code": AuditField("Supplier Code", supplier.supplier_code),
+            "supplier.supplier_name": AuditField("Supplier Name", supplier.supplier_name),
+            "supplier.tax_id": AuditField("Tax ID", supplier.tax_id),
+            "supplier.country_code": AuditField("Country", supplier.country_code),
+            "supplier.currency_code": AuditField("Currency", supplier.currency_code),
+            "supplier.payment_term_id": AuditField("Payment Terms", supplier.payment_term_id),
+            "supplier.owner_user_id": AuditField("Owner", supplier.owner_user_id),
+            "supplier.status": AuditField("Status", supplier.status, AuditValueType.ENUM),
+            "supplier.relationship_active": AuditField(
+                "Supplier Relationship Active", supplier.deleted_at is None, AuditValueType.BOOLEAN
+            ),
+        }
+        for address in supplier.addresses:
+            for path_name, label, attribute in (
+                ("address_type", "Address Type", "address_type"),
+                ("address_code", "Address Code", "address_code"),
+                ("contact_name", "Contact Name", "contact_name"),
+                ("address_line1", "Address Line 1", "address1"),
+                ("address_line2", "Address Line 2", "address2"),
+                ("city", "City", "city"),
+                ("state", "State", "state"),
+                ("postal_code", "Postal Code", "postal_code"),
+                ("country_code", "Country", "country_code"),
+                ("phone", "Phone", "phone"),
+                ("email", "Email", "email"),
+                ("is_default", "Default Address", "is_default"),
+            ):
+                fields[f"addresses[{address.address_code}].{path_name}"] = AuditField(
+                    label, getattr(address, attribute)
+                )
+        return fields
+
+    def product_snapshot(self, product: Product) -> dict[str, AuditField]:
+        excluded = {
+            "id",
+            "tenant_id",
+            "created_at",
+            "updated_at",
+            "row_version",
+            "owner_display_name",
+        }
+        return {
+            f"product.{name}": AuditField(name.replace("_", " ").title(), value)
+            for field in fields(product)
+            if (name := field.name) not in excluded
+            for value in (getattr(product, name),)
+        }
 
     def diff(
         self,

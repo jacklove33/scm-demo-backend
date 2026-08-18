@@ -39,6 +39,8 @@ class CustomerPoLineRequest(BaseModel):
 
 
 class CustomerPoMutableFields(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     requested_ship_date: date | None = None
     requested_delivery_date: date | None = None
     currency_code: str | None = Field(None, min_length=3, max_length=3)

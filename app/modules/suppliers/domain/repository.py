@@ -3,17 +3,16 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.customers.domain.entities import Customer
+from app.modules.suppliers.domain.entities import Supplier
 from app.shared.domain.current_user import PermissionScope
 
 
 @dataclass(frozen=True, slots=True)
-class CustomerSearchCriteria:
+class SupplierSearchCriteria:
     page: int = 1
     page_size: int = 20
-    customer_code: str | None = None
-    customer_name_prefix: str | None = None
-    search: str | None = None
+    supplier_code: str | None = None
+    supplier_name_prefix: str | None = None
     status: str | None = None
     created_at_from: datetime | None = None
     created_at_to_exclusive: datetime | None = None
@@ -25,89 +24,81 @@ class CustomerSearchCriteria:
 
 
 @dataclass(frozen=True, slots=True)
-class CustomerAccessFacts:
+class SupplierAccessFacts:
     is_owner: bool
     is_assigned: bool
     is_team_assigned: bool
 
 
 @dataclass(frozen=True, slots=True)
-class CustomerSearchItem:
-    customer: Customer
-    access: CustomerAccessFacts
+class SupplierSearchItem:
+    supplier: Supplier
+    access: SupplierAccessFacts
 
 
 @dataclass(frozen=True, slots=True)
-class CustomerPage:
-    items: list[CustomerSearchItem]
+class SupplierPage:
+    items: list[SupplierSearchItem]
     total: int
     page: int
     page_size: int
 
 
-class CustomerRepository(Protocol):
-    async def find_existing_codes(self, tenant_id: UUID, codes: set[str]) -> set[str]: ...
+class SupplierRepository(Protocol):
+    async def list_payment_terms(self, tenant_id: UUID) -> list[tuple[UUID, str, str]]: ...
 
-    async def find_valid_payment_term_ids(
-        self, tenant_id: UUID, payment_term_ids: set[UUID]
-    ) -> set[UUID]: ...
+    async def find_existing_partner_owner(
+        self, tenant_id: UUID, supplier_code: str
+    ) -> tuple[bool, UUID | None]: ...
 
-    async def find_valid_owner_ids(self, tenant_id: UUID, owner_ids: set[UUID]) -> set[UUID]: ...
-
+    async def find_valid_payment_term_ids(self, tenant_id: UUID, ids: set[UUID]) -> set[UUID]: ...
+    async def find_valid_owner_ids(self, tenant_id: UUID, ids: set[UUID]) -> set[UUID]: ...
     async def search(
         self,
-        criteria: CustomerSearchCriteria,
+        criteria: SupplierSearchCriteria,
         *,
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> CustomerPage: ...
-
+    ) -> SupplierPage: ...
     async def get_by_id(
         self,
-        customer_id: UUID,
+        supplier_id: UUID,
         *,
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
         include_deleted: bool = False,
-    ) -> Customer | None: ...
-
+    ) -> Supplier | None: ...
     async def get_access_facts(
-        self, customer_id: UUID, *, actor_id: UUID, tenant_id: UUID
-    ) -> CustomerAccessFacts: ...
-
-    async def create(self, customer: Customer) -> Customer: ...
-
-    async def create_many(self, customers: list[Customer]) -> None: ...
-
+        self, supplier_id: UUID, *, actor_id: UUID, tenant_id: UUID
+    ) -> SupplierAccessFacts: ...
+    async def create(self, supplier: Supplier) -> Supplier: ...
     async def update(
         self,
-        customer_id: UUID,
+        supplier_id: UUID,
         expected_version: int,
         data: dict[str, object],
         *,
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> Customer | None: ...
-
+    ) -> Supplier | None: ...
     async def soft_delete(
         self,
-        customer_id: UUID,
+        supplier_id: UUID,
         expected_version: int,
         *,
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> Customer | None: ...
-
+    ) -> Supplier | None: ...
     async def restore(
         self,
-        customer_id: UUID,
+        supplier_id: UUID,
         expected_version: int,
         *,
         actor_id: UUID,
         tenant_id: UUID,
         scope: PermissionScope,
-    ) -> Customer | None: ...
+    ) -> Supplier | None: ...

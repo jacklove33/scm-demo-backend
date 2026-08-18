@@ -98,6 +98,45 @@ def test_search_customers_serializes_row_capabilities() -> None:
     }
 
 
+def test_customer_autocomplete_search_contract_uses_existing_paginated_endpoint() -> None:
+    fake = FakeCustomerUseCases()
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_customer_use_cases] = fake_override(fake)
+    try:
+        response = TestClient(app).get(
+            "/api/v1/customers",
+            params={"page": 1, "page_size": 20, "status": "ACTIVE", "search": " apple "},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.criteria.page == 1
+    assert fake.criteria.page_size == 20
+    assert fake.criteria.status == "ACTIVE"
+    assert fake.criteria.search == "apple"
+    assert response.json()["meta"] == {"page": 1, "pageSize": 20, "total": 1}
+    item = response.json()["data"][0]
+    assert {"id", "customer_code", "customer_name", "status"} <= item.keys()
+
+
+def test_empty_customer_autocomplete_search_keeps_default_visible_page_contract() -> None:
+    fake = FakeCustomerUseCases()
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_customer_use_cases] = fake_override(fake)
+    try:
+        response = TestClient(app).get(
+            "/api/v1/customers",
+            params={"page": 1, "page_size": 20, "status": "ACTIVE", "search": "   "},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.criteria.search is None
+    assert fake.criteria.show_deleted is False
+
+
 def test_customer_date_filters_use_utc_half_open_boundaries_and_can_be_combined() -> None:
     fake = FakeCustomerUseCases()
     app.dependency_overrides[get_current_user] = override_current_user

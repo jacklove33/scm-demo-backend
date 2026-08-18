@@ -30,6 +30,16 @@ from app.shared.domain.current_user import PermissionScope
 CUSTOMER_ROLE = "CUSTOMER"
 
 
+def customer_search_predicate(search: str) -> ColumnElement[bool]:
+    """Build the database-side autocomplete match without interpreting SQL wildcards."""
+    escaped = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    return or_(
+        BusinessPartnerModel.partner_code.ilike(pattern, escape="\\"),
+        BusinessPartnerModel.partner_name.ilike(pattern, escape="\\"),
+    )
+
+
 class SqlAlchemyCustomerRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -191,6 +201,8 @@ class SqlAlchemyCustomerRepository:
             stmt = stmt.where(
                 BusinessPartnerModel.partner_name.ilike(f"{criteria.customer_name_prefix.strip()}%")
             )
+        if criteria.search and (term := criteria.search.strip()):
+            stmt = stmt.where(customer_search_predicate(term))
         if criteria.status:
             stmt = stmt.where(BusinessPartnerModel.status == criteria.status)
         if criteria.created_at_from:
