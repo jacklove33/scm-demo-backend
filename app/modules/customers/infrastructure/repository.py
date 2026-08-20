@@ -136,6 +136,19 @@ class SqlAlchemyCustomerRepository:
             .options(selectinload(BusinessPartnerModel.addresses))
         )
 
+    async def get_by_code(self, customer_code: str, *, tenant_id: UUID) -> Customer | None:
+        row = (
+            await self.session.execute(
+                self._base().where(
+                    BusinessPartnerModel.tenant_id == tenant_id,
+                    BusinessPartnerModel.partner_code == customer_code.strip().upper(),
+                    BusinessPartnerModel.status == "ACTIVE",
+                    PartnerRoleModel.deleted_at.is_(None),
+                )
+            )
+        ).first()
+        return self._to_domain(row[0], row[1].deleted_at, row[1].deleted_by) if row else None
+
     async def find_existing_codes(self, tenant_id: UUID, codes: set[str]) -> set[str]:
         if not codes:
             return set()

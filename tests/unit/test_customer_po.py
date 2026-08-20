@@ -1,10 +1,11 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.core.exceptions import EntityConflict, PermissionDenied, ValidationFailure
 from app.modules.audit.application.audit_writer import AuditWriter
@@ -135,6 +136,13 @@ class PoStore:
             self.po, deleted_at=None, deleted_by=None, row_version=expected_version + 1
         )
         return self.po
+
+
+class DuplicatePoStore(PoStore):
+    async def create(
+        self, po: CustomerPurchaseOrder, event: CustomerPoStatusEvent
+    ) -> CustomerPurchaseOrder:
+        raise IntegrityError("INSERT customer_purchase_orders", {}, RuntimeError("duplicate"))
 
 
 class AuditStore:
@@ -279,6 +287,61 @@ async def test_create_computes_amounts_stages_status_and_field_audit_then_commit
     assert events.events[0].actor_display_name == "Kevin Admin"
     assert events.events[0].correlation_id == "po-test"
     assert events.events[0].metadata == {"source": "MANUAL"}
+
+
+@pytest.mark.asyncio
+async def test_edi_create_sets_received_and_calculates_fixture_total() -> None:
+    po, audit, events = PoStore(), AuditStore(), EventStore()
+    transaction = Transaction(po, audit, events)
+    edi_command = CreateCustomerPoCommand(
+        customer_id=CUSTOMER,
+        customer_po_number="PO123456",
+        customer_po_date=date(2026, 8, 18),
+        ship_to_name="Synaptics Demo Warehouse",
+        source=CustomerPoSource.EDI,
+        currency_code="TWD",
+        lines=(
+            CustomerPoLineCommand(
+                1,
+                Decimal("100"),
+                customer_item_number="ABC123",
+                unit_of_measure="EA",
+                unit_price=Decimal("12.5"),
+            ),
+            CustomerPoLineCommand(
+                2,
+                Decimal("50"),
+                customer_item_number="XYZ789",
+                unit_of_measure="EA",
+                unit_price=Decimal("8.75"),
+            ),
+        ),
+    )
+
+    created, _ = await use_cases(po, audit, events, transaction).create(
+        edi_command, actor(), context()
+    )
+
+    assert created.status == CustomerPoStatus.RECEIVED
+    assert created.source == CustomerPoSource.EDI
+    assert created.total_amount == Decimal("1687.50")
+    assert len(created.lines) == 2
+    assert transaction.commits == 1
+    assert events.events[0].metadata == {"source": "EDI"}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_po_from_repository_becomes_standard_conflict_and_rolls_back() -> None:
+    po, audit, events = DuplicatePoStore(), AuditStore(), EventStore()
+    transaction = Transaction(po, audit, events)
+
+    with pytest.raises(EntityConflict, match="Duplicate Customer PO"):
+        await use_cases(po, audit, events, transaction).create(command(), actor(), context())
+
+    assert transaction.commits == 0
+    assert transaction.rollbacks == 1
+    assert audit.events == []
+    assert events.events == []
 
 
 @pytest.mark.asyncio

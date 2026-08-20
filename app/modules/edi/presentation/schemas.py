@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, RootModel
 
@@ -13,3 +14,4 @@ class RestEdiReceiptResponse(BaseModel):
     receiver_id: str
     document_type: str
     external_message_id: str | None
+    customer_po_id: UUID
