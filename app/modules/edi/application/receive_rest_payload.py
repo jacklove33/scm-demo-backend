@@ -1,11 +1,13 @@
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.core.exceptions import ValidationFailure
+from app.core.exceptions import EntityConflict, ValidationFailure
 from app.core.logging import sanitize_log_data
 from app.modules.audit.domain.entities import AuditContext
 from app.modules.customer_pos.application.commands import (
@@ -22,6 +24,12 @@ logger = logging.getLogger("app.modules.edi")
 
 class EdiCustomerResolver(Protocol):
     async def get_by_code(self, customer_code: str, *, tenant_id: UUID) -> Customer | None: ...
+
+
+class EdiCustomerPoReceiptResolver(Protocol):
+    async def find_edi_by_external_message(
+        self, tenant_id: UUID, sender_id: str, external_message_id: str
+    ) -> UUID | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +58,8 @@ class ReceiveRestEdiPayloadCommand:
     receiver_id: str
     document_type: str
     external_message_id: str | None
-    payload: dict[str, Any]
+    document: InboundCustomerPoDocument
+    raw_payload: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +75,13 @@ class ReceiveRestEdiPayload:
     """Map a canonical REST EDI document through the Customer PO application boundary."""
 
     def __init__(
-        self, customer_repository: EdiCustomerResolver, customer_po_use_cases: CustomerPoUseCases
+        self,
+        customer_repository: EdiCustomerResolver,
+        receipt_resolver: EdiCustomerPoReceiptResolver,
+        customer_po_use_cases: CustomerPoUseCases,
     ) -> None:
         self.customer_repository = customer_repository
+        self.receipt_resolver = receipt_resolver
         self.customer_po_use_cases = customer_po_use_cases
 
     async def execute(
@@ -78,7 +91,21 @@ class ReceiveRestEdiPayload:
         audit_context: AuditContext,
     ) -> RestEdiReceipt:
         self._log_received(command)
-        document = self._parse(command.payload)
+        if command.document_type.strip() != "850":
+            raise ValidationFailure(
+                "Unsupported EDI document type",
+                details={
+                    "error_code": "EDI_DOCUMENT_TYPE_UNSUPPORTED",
+                    "document_type": command.document_type,
+                    "supported_document_types": ["850"],
+                },
+            )
+        document = command.document
+        self._validate_document(document)
+        existing_id = await self._find_existing(command, actor.tenant_id)
+        if existing_id is not None:
+            self._log_duplicate(command, existing_id)
+            return self._receipt(command, existing_id)
         customer = await self.customer_repository.get_by_code(
             document.customer_code, tenant_id=actor.tenant_id
         )
@@ -97,15 +124,38 @@ class ReceiveRestEdiPayload:
             )
         received_at = datetime.now(UTC)
         po_command = self._to_customer_po_command(document, customer, command, received_at)
-        created, _capabilities = await self.customer_po_use_cases.create(
-            po_command, actor, audit_context
+        try:
+            created, _capabilities = await self.customer_po_use_cases.create(
+                po_command, actor, audit_context
+            )
+        except EntityConflict:
+            # CustomerPoUseCases has rolled back its transaction. Re-read the
+            # idempotency identity to distinguish a concurrent retry from a true
+            # business duplicate, preserving the existing conflict otherwise.
+            existing_id = await self._find_existing(command, actor.tenant_id)
+            if existing_id is None:
+                raise
+            self._log_duplicate(command, existing_id)
+            return self._receipt(command, existing_id)
+        return self._receipt(command, created.id)
+
+    async def _find_existing(
+        self, command: ReceiveRestEdiPayloadCommand, tenant_id: UUID
+    ) -> UUID | None:
+        if not command.external_message_id:
+            return None
+        return await self.receipt_resolver.find_edi_by_external_message(
+            tenant_id, command.sender_id, command.external_message_id
         )
+
+    @staticmethod
+    def _receipt(command: ReceiveRestEdiPayloadCommand, customer_po_id: UUID) -> RestEdiReceipt:
         return RestEdiReceipt(
             command.sender_id,
             command.receiver_id,
             command.document_type,
             command.external_message_id,
-            created.id,
+            customer_po_id,
         )
 
     @staticmethod
@@ -140,80 +190,18 @@ class ReceiveRestEdiPayload:
             edi_receiver_id=envelope.receiver_id,
             edi_received_at=received_at,
             external_message_id=envelope.external_message_id,
+            source_document_hash=ReceiveRestEdiPayload._document_hash(envelope.raw_payload),
         )
 
-    @classmethod
-    def _parse(cls, payload: dict[str, Any]) -> InboundCustomerPoDocument:
-        customer = cls._required_text(payload, "customer")
-        po_number = cls._required_text(payload, "poNumber")
-        try:
-            po_date = date.fromisoformat(cls._required_text(payload, "poDate"))
-        except ValueError as exc:
-            raise ValidationFailure("Invalid EDI poDate", details={"field": "poDate"}) from exc
-        raw_lines = payload.get("lines")
-        if not isinstance(raw_lines, list) or not raw_lines:
-            raise ValidationFailure(
-                "EDI document requires at least one line", details={"field": "lines"}
-            )
-        lines = tuple(cls._parse_line(value, index + 1) for index, value in enumerate(raw_lines))
-        if len({line.line_number for line in lines}) != len(lines):
+    @staticmethod
+    def _validate_document(document: InboundCustomerPoDocument) -> None:
+        if len({line.line_number for line in document.lines}) != len(document.lines):
             raise ValidationFailure("Duplicate EDI line number", details={"field": "lineNumber"})
-        return InboundCustomerPoDocument(
-            customer.upper(),
-            po_number,
-            po_date,
-            cls._optional_text(payload.get("shipTo")),
-            cls._optional_text(payload.get("purposeCode")),
-            lines,
-        )
-
-    @classmethod
-    def _parse_line(cls, value: Any, row: int) -> InboundCustomerPoLine:
-        if not isinstance(value, dict):
-            raise ValidationFailure("Invalid EDI line", details={"row": row})
-        try:
-            line_number = int(cls._required_text(value, "lineNumber"))
-            quantity = cls._decimal(value.get("quantity"), "quantity", row)
-            unit_price = (
-                cls._decimal(value["unitPrice"], "unitPrice", row)
-                if value.get("unitPrice") is not None
-                else None
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValidationFailure("Invalid EDI line value", details={"row": row}) from exc
-        if line_number < 1 or quantity <= 0 or (unit_price is not None and unit_price < 0):
-            raise ValidationFailure("Invalid EDI line value", details={"row": row})
-        return InboundCustomerPoLine(
-            line_number,
-            cls._required_text(value, "item"),
-            cls._optional_text(value.get("itemQualifier")),
-            quantity,
-            cls._optional_text(value.get("uom"), upper=True),
-            unit_price,
-        )
 
     @staticmethod
-    def _decimal(value: Any, field: str, row: int) -> Decimal:
-        try:
-            return Decimal(str(value))
-        except (InvalidOperation, ValueError) as exc:
-            raise ValidationFailure(
-                "Invalid EDI decimal", details={"field": field, "row": row}
-            ) from exc
-
-    @staticmethod
-    def _required_text(value: dict[str, Any], field: str) -> str:
-        result = ReceiveRestEdiPayload._optional_text(value.get(field))
-        if not result:
-            raise ValidationFailure("Missing EDI field", details={"field": field})
-        return result
-
-    @staticmethod
-    def _optional_text(value: Any, *, upper: bool = False) -> str | None:
-        if value is None:
-            return None
-        result = str(value).strip()
-        return result.upper() if result and upper else result or None
+    def _document_hash(payload: dict[str, Any]) -> str:
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(serialized.encode()).hexdigest()
 
     @staticmethod
     def _log_received(command: ReceiveRestEdiPayloadCommand) -> None:
@@ -224,7 +212,7 @@ class ReceiveRestEdiPayload:
             command.receiver_id,
             command.document_type,
             command.external_message_id,
-            sanitize_log_data(command.payload),
+            sanitize_log_data(command.raw_payload),
             extra={
                 "business_module": "edi",
                 "sender_id": command.sender_id,
@@ -232,6 +220,21 @@ class ReceiveRestEdiPayload:
                 "document_type": command.document_type,
                 "external_message_id": command.external_message_id,
                 "source_protocol": "REST",
-                "payload": command.payload,
+                "payload": command.raw_payload,
+            },
+        )
+
+    @staticmethod
+    def _log_duplicate(command: ReceiveRestEdiPayloadCommand, customer_po_id: UUID) -> None:
+        logger.info(
+            "Duplicate REST EDI delivery detected",
+            extra={
+                "business_module": "edi",
+                "sender_id": command.sender_id,
+                "receiver_id": command.receiver_id,
+                "document_type": command.document_type,
+                "external_message_id": command.external_message_id,
+                "customer_po_id": str(customer_po_id),
+                "source_protocol": "REST",
             },
         )

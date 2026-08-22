@@ -8,9 +8,8 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.dependencies.edi import get_receive_rest_edi_payload
-from app.api.dependencies.identity import get_current_user
-from app.core.exceptions import ValidationFailure
+from app.api.dependencies.edi import get_edi_inbound_actor, get_receive_rest_edi_payload
+from app.core.exceptions import EntityConflict, ValidationFailure
 from app.main import app
 from app.modules.audit.domain.entities import AuditContext
 from app.modules.audit.domain.enums import AuditActorType, AuditSource
@@ -19,11 +18,13 @@ from app.modules.customer_pos.application.use_cases import CustomerPoUseCases
 from app.modules.customer_pos.domain.enums import CustomerPoSource
 from app.modules.customers.domain.entities import Customer
 from app.modules.edi.application.receive_rest_payload import (
+    EdiCustomerPoReceiptResolver,
     EdiCustomerResolver,
     ReceiveRestEdiPayload,
     ReceiveRestEdiPayloadCommand,
     RestEdiReceipt,
 )
+from app.modules.edi.presentation.schemas import RestEdiPayloadRequest
 from app.shared.domain.current_user import (
     CurrentUser,
     EffectivePermission,
@@ -130,20 +131,66 @@ class CapturingCustomerPoUseCases:
         return SimpleNamespace(id=PO_ID), None
 
 
+class ReceiptLookup:
+    def __init__(self, existing_id: UUID | None = None) -> None:
+        self.existing_id = existing_id
+        self.calls: list[tuple[UUID, str, str]] = []
+
+    async def find_edi_by_external_message(
+        self, tenant_id: UUID, sender_id: str, external_message_id: str
+    ) -> UUID | None:
+        self.calls.append((tenant_id, sender_id, external_message_id))
+        return self.existing_id
+
+
+class SequencedReceiptLookup(ReceiptLookup):
+    def __init__(self, results: list[UUID | None]) -> None:
+        super().__init__()
+        self.results = results
+
+    async def find_edi_by_external_message(
+        self, tenant_id: UUID, sender_id: str, external_message_id: str
+    ) -> UUID | None:
+        self.calls.append((tenant_id, sender_id, external_message_id))
+        return self.results.pop(0)
+
+
+class ConflictingCustomerPoUseCases(CapturingCustomerPoUseCases):
+    async def create(
+        self, command: CreateCustomerPoCommand, actor: CurrentUser, context: AuditContext
+    ) -> tuple[Any, Any]:
+        self.command = command
+        raise EntityConflict("Duplicate Customer PO")
+
+
+def inbound_command(
+    *,
+    document_type: str = "850",
+    external_message_id: str | None = "REST-DEMO-001",
+    payload: dict[str, Any] = PAYLOAD,
+) -> ReceiveRestEdiPayloadCommand:
+    request = RestEdiPayloadRequest.model_validate(payload)
+    return ReceiveRestEdiPayloadCommand(
+        "WPG",
+        "SYNA",
+        document_type,
+        external_message_id,
+        request.to_document(),
+        request.model_dump(by_alias=True, mode="json"),
+    )
+
+
 @pytest.mark.asyncio
 async def test_fixture_maps_to_existing_customer_po_creation_contract() -> None:
     customers = CustomerLookup()
     customer_pos = CapturingCustomerPoUseCases()
     service = ReceiveRestEdiPayload(
         cast(EdiCustomerResolver, cast(Any, customers)),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, ReceiptLookup())),
         cast(CustomerPoUseCases, cast(Any, customer_pos)),
     )
 
-    receipt = await service.execute(
-        ReceiveRestEdiPayloadCommand("WPG", "SYNA", "850", "REST-DEMO-001", PAYLOAD),
-        actor(),
-        context(),
-    )
+    receipt = await service.execute(inbound_command(), actor(), context())
 
     command = customer_pos.command
     assert command is not None
@@ -155,6 +202,11 @@ async def test_fixture_maps_to_existing_customer_po_creation_contract() -> None:
     assert command.ship_to_name == "Synaptics Demo Warehouse"
     assert command.source == CustomerPoSource.EDI
     assert command.currency_code == "TWD"
+    assert command.source_document_hash is not None
+    assert len(command.source_document_hash) == 64
+    assert command.edi_sender_id == "WPG"
+    assert command.edi_receiver_id == "SYNA"
+    assert command.external_message_id == "REST-DEMO-001"
     assert len(command.lines) == 2
     assert [
         (
@@ -181,12 +233,11 @@ async def test_missing_customer_stops_before_customer_po_creation() -> None:
     customer_pos = CapturingCustomerPoUseCases()
     service = ReceiveRestEdiPayload(
         cast(EdiCustomerResolver, cast(Any, CustomerLookup(False))),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, ReceiptLookup())),
         cast(CustomerPoUseCases, cast(Any, customer_pos)),
     )
     with pytest.raises(ValidationFailure, match="customer was not found") as raised:
-        await service.execute(
-            ReceiveRestEdiPayloadCommand("WPG", "SYNA", "850", None, PAYLOAD), actor(), context()
-        )
+        await service.execute(inbound_command(external_message_id=None), actor(), context())
     assert raised.value.details["error_code"] == "EDI_CUSTOMER_NOT_FOUND"
     assert customer_pos.command is None
 
@@ -196,20 +247,83 @@ async def test_duplicate_line_number_stops_before_customer_po_creation() -> None
     customer_pos = CapturingCustomerPoUseCases()
     service = ReceiveRestEdiPayload(
         cast(EdiCustomerResolver, cast(Any, CustomerLookup())),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, ReceiptLookup())),
         cast(CustomerPoUseCases, cast(Any, customer_pos)),
     )
-    duplicate = {**PAYLOAD, "lines": [PAYLOAD["lines"][0], PAYLOAD["lines"][0]]}
+    duplicate = RestEdiPayloadRequest.model_validate(
+        {**PAYLOAD, "lines": [PAYLOAD["lines"][0], PAYLOAD["lines"][0]]}
+    )
     with pytest.raises(ValidationFailure, match="Duplicate EDI line number"):
         await service.execute(
-            ReceiveRestEdiPayloadCommand("WPG", "SYNA", "850", None, duplicate), actor(), context()
+            ReceiveRestEdiPayloadCommand(
+                "WPG",
+                "SYNA",
+                "850",
+                None,
+                duplicate.to_document(),
+                duplicate.model_dump(by_alias=True, mode="json"),
+            ),
+            actor(),
+            context(),
         )
     assert customer_pos.command is None
 
 
+@pytest.mark.asyncio
+async def test_non_850_is_rejected_before_customer_resolution() -> None:
+    customers = CustomerLookup()
+    customer_pos = CapturingCustomerPoUseCases()
+    service = ReceiveRestEdiPayload(
+        cast(EdiCustomerResolver, cast(Any, customers)),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, ReceiptLookup())),
+        cast(CustomerPoUseCases, cast(Any, customer_pos)),
+    )
+    with pytest.raises(ValidationFailure) as raised:
+        await service.execute(inbound_command(document_type="860"), actor(), context())
+    assert raised.value.details["error_code"] == "EDI_DOCUMENT_TYPE_UNSUPPORTED"
+    assert customers.requested is None
+    assert customer_pos.command is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_delivery_returns_original_po_without_creating() -> None:
+    customers = CustomerLookup()
+    customer_pos = CapturingCustomerPoUseCases()
+    lookup = ReceiptLookup(PO_ID)
+    service = ReceiveRestEdiPayload(
+        cast(EdiCustomerResolver, cast(Any, customers)),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, lookup)),
+        cast(CustomerPoUseCases, cast(Any, customer_pos)),
+    )
+    receipt = await service.execute(inbound_command(), actor(), context())
+    assert receipt.customer_po_id == PO_ID
+    assert lookup.calls == [(TENANT, "WPG", "REST-DEMO-001")]
+    assert customers.requested is None
+    assert customer_pos.command is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_race_returns_winning_po_id() -> None:
+    lookup = SequencedReceiptLookup([None, PO_ID])
+    service = ReceiveRestEdiPayload(
+        cast(EdiCustomerResolver, cast(Any, CustomerLookup())),
+        cast(EdiCustomerPoReceiptResolver, cast(Any, lookup)),
+        cast(CustomerPoUseCases, cast(Any, ConflictingCustomerPoUseCases())),
+    )
+    receipt = await service.execute(inbound_command(), actor(), context())
+    assert receipt.customer_po_id == PO_ID
+    assert len(lookup.calls) == 2
+
+
 class ApiService:
+    last_actor: CurrentUser | None = None
+    last_context: AuditContext | None = None
+
     async def execute(
         self, command: ReceiveRestEdiPayloadCommand, actor: CurrentUser, audit_context: AuditContext
     ) -> RestEdiReceipt:
+        type(self).last_actor = actor
+        type(self).last_context = audit_context
         return RestEdiReceipt(
             command.sender_id,
             command.receiver_id,
@@ -221,7 +335,7 @@ class ApiService:
 
 @pytest.fixture
 def api_overrides() -> Iterator[None]:
-    app.dependency_overrides[get_current_user] = actor
+    app.dependency_overrides[get_edi_inbound_actor] = actor
     app.dependency_overrides[get_receive_rest_edi_payload] = ApiService
     yield
     app.dependency_overrides.clear()
@@ -240,6 +354,10 @@ def test_receive_rest_edi_payload_returns_accepted(api_overrides: None) -> None:
         "external_message_id": "REST-DEMO-001",
         "customer_po_id": str(PO_ID),
     }
+    assert ApiService.last_actor == actor()
+    assert ApiService.last_context is not None
+    assert ApiService.last_context.tenant_id == TENANT
+    assert ApiService.last_context.source == AuditSource.EDI
 
 
 @pytest.mark.parametrize("missing_header", REQUIRED_HEADERS)
@@ -260,4 +378,30 @@ def test_receive_rest_edi_payload_rejects_invalid_json(api_overrides: None) -> N
         headers={**REQUIRED_HEADERS, "Content-Type": "application/json"},
         content='{"poNumber":',
     )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**PAYLOAD, "lines": []},
+        {
+            **PAYLOAD,
+            "lines": [
+                {
+                    "uom": "EA",
+                    "item": "ABC123",
+                    "quantity": 0,
+                    "unitPrice": 12.5,
+                    "lineNumber": "1",
+                    "itemQualifier": "BP",
+                }
+            ],
+        },
+    ],
+)
+def test_canonical_contract_rejects_empty_lines_and_invalid_quantity(
+    payload: dict[str, Any], api_overrides: None
+) -> None:
+    response = TestClient(app).post(PATH, headers=REQUIRED_HEADERS, json=payload)
     assert response.status_code == 422

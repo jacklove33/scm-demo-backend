@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+from uuid import UUID
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +17,8 @@ class Settings(BaseSettings):
     migration_database_url: str | None = None
 
     auth_mode: Literal["dev_header", "jwt"] = "dev_header"
+    edi_inbound_auth_mode: Literal["dev_no_auth", "api_key"] = "api_key"
+    edi_dev_user_id: UUID | None = None
     jwt_secret: str = ""
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = ""

@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, update
@@ -69,6 +69,21 @@ class SqlAlchemyCustomerPoRepository:
                     ProfileModel.is_active.is_(True),
                 )
             )
+        )
+
+    async def find_edi_by_external_message(
+        self, tenant_id: UUID, sender_id: str, external_message_id: str
+    ) -> UUID | None:
+        return cast(
+            UUID | None,
+            await self.session.scalar(
+                select(CustomerPoModel.id).where(
+                    CustomerPoModel.tenant_id == tenant_id,
+                    CustomerPoModel.source == CustomerPoSource.EDI.value,
+                    CustomerPoModel.edi_sender_id == sender_id,
+                    CustomerPoModel.external_message_id == external_message_id,
+                )
+            ),
         )
 
     def _scope(self, statement: Any, scope: PermissionScope, actor_id: UUID) -> Any:

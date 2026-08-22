@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -44,6 +45,16 @@ class CustomerPoModel(Base):
         Index("ix_customer_pos_tenant_po_date", "tenant_id", "customer_po_date"),
         Index("ix_customer_pos_tenant_delivery", "tenant_id", "requested_delivery_date"),
         Index("ix_customer_pos_edi_log_id", "edi_log_id"),
+        Index(
+            "uq_customer_pos_edi_external_message",
+            "tenant_id",
+            "edi_sender_id",
+            "external_message_id",
+            unique=True,
+            postgresql_where=text(
+                "source = 'EDI' AND edi_sender_id IS NOT NULL AND external_message_id IS NOT NULL"
+            ),
+        ),
         Index("ix_customer_pos_sales_order_id", "sales_order_id"),
     )
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

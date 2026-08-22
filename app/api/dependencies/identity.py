@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends
 from sqlalchemy import text
@@ -13,17 +14,13 @@ from app.modules.iam.infrastructure.repository import SqlAlchemyIamRepository
 from app.shared.domain.current_user import AuthenticatedPrincipal, CurrentUser
 
 
-async def get_current_user(
-    principal: Annotated[AuthenticatedPrincipal, Depends(get_principal)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> CurrentUser:
-    # FastAPI caches dependency results inside the same request by default,
-    # so IAM is resolved once even when multiple downstream dependencies reuse CurrentUser.
+async def load_current_user_context(user_id: UUID, session: AsyncSession) -> CurrentUser:
+    """Resolve an application identity and bind its request/transaction context."""
     service = CurrentUserService(
         repository=SqlAlchemyIamRepository(session),
         resolver=EffectivePermissionResolver(),
     )
-    current_user = await service.load(principal.user_id)
+    current_user = await service.load(user_id)
     bind_log_context(user_id=current_user.user_id, tenant_id=current_user.tenant_id)
     # Transaction-local settings are consumed by tenant RLS policies. Values are
     # parameterized and disappear automatically at transaction end/pool reuse.
@@ -35,3 +32,12 @@ async def get_current_user(
         {"tenant_id": str(current_user.tenant_id), "user_id": str(current_user.user_id)},
     )
     return current_user
+
+
+async def get_current_user(
+    principal: Annotated[AuthenticatedPrincipal, Depends(get_principal)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CurrentUser:
+    # FastAPI caches dependency results inside the same request by default,
+    # so IAM is resolved once even when multiple downstream dependencies reuse CurrentUser.
+    return await load_current_user_context(principal.user_id, session)

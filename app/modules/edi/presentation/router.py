@@ -3,8 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, Request, status
 
 from app.api.dependencies.audit import build_audit_context
-from app.api.dependencies.edi import get_receive_rest_edi_payload
-from app.api.dependencies.identity import get_current_user
+from app.api.dependencies.edi import get_edi_inbound_actor, get_receive_rest_edi_payload
 from app.modules.audit.domain.enums import AuditSource
 from app.modules.edi.application.receive_rest_payload import (
     ReceiveRestEdiPayload,
@@ -24,7 +23,7 @@ router = APIRouter(prefix="/edi/rest", tags=["edi-rest"])
 async def receive_rest_edi_payload(
     request: RestEdiPayloadRequest,
     http_request: Request,
-    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    actor: Annotated[CurrentUser, Depends(get_edi_inbound_actor)],
     use_case: Annotated[ReceiveRestEdiPayload, Depends(get_receive_rest_edi_payload)],
     sender_id: Annotated[str, Header(alias="X-Sender-ID", min_length=1)],
     receiver_id: Annotated[str, Header(alias="X-Receiver-ID", min_length=1)],
@@ -35,11 +34,12 @@ async def receive_rest_edi_payload(
 ) -> RestEdiReceiptResponse:
     receipt = await use_case.execute(
         ReceiveRestEdiPayloadCommand(
-            sender_id=sender_id,
-            receiver_id=receiver_id,
-            document_type=document_type,
-            external_message_id=external_message_id,
-            payload=request.root,
+            sender_id=sender_id.strip(),
+            receiver_id=receiver_id.strip(),
+            document_type=document_type.strip(),
+            external_message_id=external_message_id.strip() if external_message_id else None,
+            document=request.to_document(),
+            raw_payload=request.model_dump(by_alias=True, mode="json"),
         ),
         actor,
         build_audit_context(actor, http_request, source=AuditSource.EDI),
