@@ -161,7 +161,7 @@ class CustomerPoUseCases:
             updated_at=now,
             created_by=actor.user_id,
             updated_by=actor.user_id,
-            edi_log_id=command.edi_log_id,
+            edi_message_id=command.edi_message_id,
             edi_transaction_type=command.edi_transaction_type,
             edi_standard=command.edi_standard,
             edi_version=command.edi_version,
@@ -508,7 +508,7 @@ class CustomerPoUseCases:
             actor.user_id,
             po.source,
             context.correlation_id,
-            po.edi_log_id,
+            po.edi_message_id,
             {},
             datetime.now(UTC),
         )

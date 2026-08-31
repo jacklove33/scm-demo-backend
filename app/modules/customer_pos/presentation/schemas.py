@@ -136,7 +136,7 @@ class CustomerPoResponse(BaseModel):
     deleted_at: datetime | None
     created_at: datetime
     updated_at: datetime
-    edi_log_id: UUID | None
+    edi_message_id: UUID | None
     sales_order_id: UUID | None
     lines: list[CustomerPoLineResponse]
     capabilities: CustomerPoCapabilities

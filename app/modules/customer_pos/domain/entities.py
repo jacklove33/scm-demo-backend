@@ -72,7 +72,7 @@ class CustomerPurchaseOrder:
     updated_at: datetime
     created_by: UUID | None
     updated_by: UUID | None
-    edi_log_id: UUID | None = None
+    edi_message_id: UUID | None = None
     edi_transaction_type: str | None = None
     edi_standard: str | None = None
     edi_version: str | None = None
@@ -106,6 +106,6 @@ class CustomerPoStatusEvent:
     actor_user_id: UUID | None
     source: CustomerPoSource
     correlation_id: str | None
-    edi_log_id: UUID | None
+    edi_message_id: UUID | None
     metadata: dict[str, object]
     occurred_at: datetime

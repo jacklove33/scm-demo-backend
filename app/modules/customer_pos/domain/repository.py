@@ -21,7 +21,7 @@ class CustomerPoSearchCriteria:
     requested_delivery_date_from: date | None = None
     requested_delivery_date_to: date | None = None
     owner_user_id: UUID | None = None
-    edi_log_id: UUID | None = None
+    edi_message_id: UUID | None = None
     sales_order_id: UUID | None = None
     show_deleted: bool = False
     sort_field: str = "created_at"

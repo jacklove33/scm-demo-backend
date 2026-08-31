@@ -32,8 +32,7 @@ def scope_allows(
         return True
 
     return (
-        scope in (PermissionScope.OWN, PermissionScope.TEAM)
-        and po.owner_user_id == actor.user_id
+        scope in (PermissionScope.OWN, PermissionScope.TEAM) and po.owner_user_id == actor.user_id
     )
 
 
@@ -68,34 +67,17 @@ def capabilities(
         po,
     )
 
-    transitions = list(
-        CustomerPoStatusTransitions.allowed(po.status)
-    )
+    transitions = list(CustomerPoStatusTransitions.allowed(po.status))
 
     return CustomerPoCapabilities(
         update=update,
-
         delete=scope_allows(
             actor,
             "customer_pos.delete",
             po,
         ),
-
         restore=False,
-
-        change_status=(
-            can_change_status
-            and len(transitions) > 0
-        ),
-
-        allowed_status_transitions=(
-            transitions
-            if can_change_status
-            else []
-        ),
-
-        assign_owner=(
-            update
-            and actor.can("customer_pos.assign_owner")
-        ),
+        change_status=(can_change_status and len(transitions) > 0),
+        allowed_status_transitions=(transitions if can_change_status else []),
+        assign_owner=(update and actor.can("customer_pos.assign_owner")),
     )

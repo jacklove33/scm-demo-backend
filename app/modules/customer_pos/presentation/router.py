@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.dependencies.audit import build_audit_context
 from app.api.dependencies.customer_pos import get_customer_po_use_cases
+from app.api.dependencies.edi import get_edi_message_use_cases
 from app.api.dependencies.identity import get_current_user
 from app.modules.customer_pos.application.capabilities import capabilities
 from app.modules.customer_pos.application.commands import (
@@ -29,6 +30,11 @@ from app.modules.customer_pos.presentation.schemas import (
     StatusEventResponse,
     UpdateCustomerPoRequest,
     VersionRequest,
+)
+from app.modules.edi.application.use_cases import EdiMessageUseCases
+from app.modules.edi.presentation.tracking_schemas import (
+    CustomerPoEdiHistoryResponse,
+    EdiMessageResponse,
 )
 from app.shared.domain.current_user import CurrentUser
 
@@ -54,7 +60,7 @@ async def search_customer_pos(
     requested_delivery_date_from: date | None = None,
     requested_delivery_date_to: date | None = None,
     owner_user_id: UUID | None = None,
-    edi_log_id: UUID | None = None,
+    edi_message_id: UUID | None = None,
     sales_order_id: UUID | None = None,
     show_deleted: bool = False,
     sort_field: str = "created_at",
@@ -73,7 +79,7 @@ async def search_customer_pos(
             requested_delivery_date_from,
             requested_delivery_date_to,
             owner_user_id,
-            edi_log_id,
+            edi_message_id,
             sales_order_id,
             show_deleted,
             sort_field,
@@ -111,6 +117,21 @@ async def get_customer_po(
 ) -> CustomerPoResponse:
     po, caps = await use_cases.get(customer_po_id, actor)
     return CustomerPoResponse.from_domain(po, caps)
+
+
+@router.get("/{customer_po_id}/edi-history", response_model=CustomerPoEdiHistoryResponse)
+async def customer_po_edi_history(
+    customer_po_id: UUID,
+    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    customer_po_use_cases: Annotated[CustomerPoUseCases, Depends(get_customer_po_use_cases)],
+    edi_use_cases: Annotated[EdiMessageUseCases, Depends(get_edi_message_use_cases)],
+) -> CustomerPoEdiHistoryResponse:
+    # Enforce the Customer PO detail scope before exposing related EDI records.
+    await customer_po_use_cases.get(customer_po_id, actor)
+    messages = await edi_use_cases.customer_po_history(customer_po_id, actor)
+    return CustomerPoEdiHistoryResponse(
+        items=[EdiMessageResponse.from_domain(message) for message in messages]
+    )
 
 
 @router.put("/{customer_po_id}", response_model=CustomerPoResponse)

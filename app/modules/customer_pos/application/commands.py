@@ -60,7 +60,7 @@ class CreateCustomerPoCommand(CustomerPoFields):
     received_at: datetime | None = None
     source: CustomerPoSource = CustomerPoSource.MANUAL
     lines: tuple[CustomerPoLineCommand, ...] = ()
-    edi_log_id: UUID | None = None
+    edi_message_id: UUID | None = None
     edi_transaction_type: str | None = None
     edi_standard: str | None = None
     edi_version: str | None = None

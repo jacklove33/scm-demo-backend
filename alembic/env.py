@@ -14,6 +14,7 @@ from app.modules.audit.infrastructure import models as audit_models  # noqa: F40
 from app.modules.auth.infrastructure import models as auth_models  # noqa: F401
 from app.modules.customer_pos.infrastructure import models as customer_po_models  # noqa: F401
 from app.modules.customers.infrastructure import models as customer_models  # noqa: F401
+from app.modules.edi.infrastructure import models as edi_models  # noqa: F401
 from app.modules.iam.infrastructure import models as iam_models  # noqa: F401
 
 config = context.config

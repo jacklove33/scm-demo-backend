@@ -61,3 +61,4 @@ class RestEdiReceiptResponse(BaseModel):
     document_type: str
     external_message_id: str | None
     customer_po_id: UUID
+    edi_message_id: UUID

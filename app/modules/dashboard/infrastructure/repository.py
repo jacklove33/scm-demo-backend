@@ -259,8 +259,7 @@ class SqlAlchemyDashboardRepository:
         )
         line_amount = func.coalesce(
             CustomerPoLineModel.line_amount,
-            CustomerPoLineModel.ordered_quantity
-            * func.coalesce(CustomerPoLineModel.unit_price, 0),
+            CustomerPoLineModel.ordered_quantity * func.coalesce(CustomerPoLineModel.unit_price, 0),
             0,
         )
         statement = (
@@ -286,8 +285,7 @@ class SqlAlchemyDashboardRepository:
         for row in rows:
             grouped[(row.product_id, str(row.product_code), str(row.product_name))].append(row)
         total_associations = sum(
-            sum(int(row.po_count) for row in product_rows)
-            for product_rows in grouped.values()
+            sum(int(row.po_count) for row in product_rows) for product_rows in grouped.values()
         )
         items = [
             ProductItem(

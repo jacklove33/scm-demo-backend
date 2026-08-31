@@ -36,6 +36,11 @@ class CustomerPoModel(Base):
             ["payment_terms.tenant_id", "payment_terms.id"],
             name="fk_customer_pos_tenant_payment_term",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "edi_message_id"],
+            ["edi_messages.tenant_id", "edi_messages.id"],
+            name="fk_customer_pos_tenant_edi_message",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_customer_pos_tenant_id_id"),
         Index("ix_customer_pos_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_customer_pos_tenant_number", "tenant_id", "customer_po_number"),
@@ -44,7 +49,7 @@ class CustomerPoModel(Base):
         Index("ix_customer_pos_tenant_source", "tenant_id", "source"),
         Index("ix_customer_pos_tenant_po_date", "tenant_id", "customer_po_date"),
         Index("ix_customer_pos_tenant_delivery", "tenant_id", "requested_delivery_date"),
-        Index("ix_customer_pos_edi_log_id", "edi_log_id"),
+        Index("ix_customer_pos_edi_message_id", "edi_message_id"),
         Index(
             "uq_customer_pos_edi_external_message",
             "tenant_id",
@@ -102,8 +107,9 @@ class CustomerPoModel(Base):
     )
     created_by: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("profiles.id"))
     updated_by: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("profiles.id"))
-    edi_log_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), comment="Reserved for future linkage to EDI transmission/log event"
+    edi_message_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        comment="ERP-side EDI message that created this Customer PO",
     )
     edi_transaction_type: Mapped[str | None] = mapped_column(String(30))
     edi_standard: Mapped[str | None] = mapped_column(String(30))
@@ -189,7 +195,7 @@ class CustomerPoStatusEventModel(Base):
     )
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     correlation_id: Mapped[str | None] = mapped_column(String(100))
-    edi_log_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    edi_message_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )

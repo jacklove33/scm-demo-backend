@@ -67,7 +67,6 @@ class CustomerPoStatusTransitions:
             CustomerPoStatus.PROCESSING,
             CustomerPoStatus.CANCELLED,
         },
-
         # Terminal states
         CustomerPoStatus.CONVERTED: set(),
         CustomerPoStatus.REJECTED: set(),
@@ -111,8 +110,7 @@ class CustomerPoStatusTransitions:
         """
         if after not in cls._allowed.get(before, set()):
             raise EntityConflict(
-                f"Invalid Customer PO status transition: "
-                f"{before.value} -> {after.value}"
+                f"Invalid Customer PO status transition: {before.value} -> {after.value}"
             )
 
     @staticmethod
@@ -120,24 +118,12 @@ class CustomerPoStatusTransitions:
         after: CustomerPoStatus,
     ) -> CustomerPoStatusEventType:
         return {
-            CustomerPoStatus.VALIDATING:
-                CustomerPoStatusEventType.VALIDATION_STARTED,
-
-            CustomerPoStatus.VALIDATED:
-                CustomerPoStatusEventType.VALIDATION_PASSED,
-
-            CustomerPoStatus.ON_HOLD:
-                CustomerPoStatusEventType.PUT_ON_HOLD,
-
-            CustomerPoStatus.CONVERTED:
-                CustomerPoStatusEventType.CONVERTED,
-
-            CustomerPoStatus.REJECTED:
-                CustomerPoStatusEventType.REJECTED,
-
-            CustomerPoStatus.CANCELLED:
-                CustomerPoStatusEventType.CANCELLED,
-
+            CustomerPoStatus.VALIDATING: CustomerPoStatusEventType.VALIDATION_STARTED,
+            CustomerPoStatus.VALIDATED: CustomerPoStatusEventType.VALIDATION_PASSED,
+            CustomerPoStatus.ON_HOLD: CustomerPoStatusEventType.PUT_ON_HOLD,
+            CustomerPoStatus.CONVERTED: CustomerPoStatusEventType.CONVERTED,
+            CustomerPoStatus.REJECTED: CustomerPoStatusEventType.REJECTED,
+            CustomerPoStatus.CANCELLED: CustomerPoStatusEventType.CANCELLED,
         }.get(
             after,
             CustomerPoStatusEventType.STATUS_CHANGED,

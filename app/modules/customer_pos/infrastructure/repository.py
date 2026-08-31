@@ -167,7 +167,7 @@ class SqlAlchemyCustomerPoRepository:
                 else None,
             ),
             (criteria.owner_user_id, CustomerPoModel.owner_user_id == criteria.owner_user_id),
-            (criteria.edi_log_id, CustomerPoModel.edi_log_id == criteria.edi_log_id),
+            (criteria.edi_message_id, CustomerPoModel.edi_message_id == criteria.edi_message_id),
             (criteria.sales_order_id, CustomerPoModel.sales_order_id == criteria.sales_order_id),
         )
         for value, condition in filters:
@@ -256,7 +256,7 @@ class SqlAlchemyCustomerPoRepository:
             "status",
             "created_at",
             "created_by",
-            "edi_log_id",
+            "edi_message_id",
             "edi_transaction_type",
             "edi_standard",
             "edi_version",
@@ -458,7 +458,7 @@ class SqlAlchemyCustomerPoRepository:
             actor_user_id=event.actor_user_id,
             source=event.source.value,
             correlation_id=event.correlation_id,
-            edi_log_id=event.edi_log_id,
+            edi_message_id=event.edi_message_id,
             metadata_json=event.metadata,
             occurred_at=event.occurred_at,
         )
@@ -476,7 +476,7 @@ class SqlAlchemyCustomerPoRepository:
             row.actor_user_id,
             CustomerPoSource(row.source),
             row.correlation_id,
-            row.edi_log_id,
+            row.edi_message_id,
             row.metadata_json,
             row.occurred_at,
         )

@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.core.exceptions import EntityConflict, ValidationFailure
+from app.core.exceptions import AppError, EntityConflict, ValidationFailure
 from app.core.logging import sanitize_log_data
 from app.modules.audit.domain.entities import AuditContext
 from app.modules.customer_pos.application.commands import (
@@ -17,6 +17,8 @@ from app.modules.customer_pos.application.commands import (
 from app.modules.customer_pos.application.use_cases import CustomerPoUseCases
 from app.modules.customer_pos.domain.enums import CustomerPoSource
 from app.modules.customers.domain.entities import Customer
+from app.modules.edi.application.tracker import EdiMessageTracker
+from app.modules.edi.domain.enums import EdiMessageDirection, EdiRelatedEntityType
 from app.shared.domain.current_user import CurrentUser
 
 logger = logging.getLogger("app.modules.edi")
@@ -24,12 +26,6 @@ logger = logging.getLogger("app.modules.edi")
 
 class EdiCustomerResolver(Protocol):
     async def get_by_code(self, customer_code: str, *, tenant_id: UUID) -> Customer | None: ...
-
-
-class EdiCustomerPoReceiptResolver(Protocol):
-    async def find_edi_by_external_message(
-        self, tenant_id: UUID, sender_id: str, external_message_id: str
-    ) -> UUID | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +65,7 @@ class RestEdiReceipt:
     document_type: str
     external_message_id: str | None
     customer_po_id: UUID
+    edi_message_id: UUID
 
 
 class ReceiveRestEdiPayload:
@@ -77,12 +74,12 @@ class ReceiveRestEdiPayload:
     def __init__(
         self,
         customer_repository: EdiCustomerResolver,
-        receipt_resolver: EdiCustomerPoReceiptResolver,
         customer_po_use_cases: CustomerPoUseCases,
+        tracker: EdiMessageTracker,
     ) -> None:
         self.customer_repository = customer_repository
-        self.receipt_resolver = receipt_resolver
         self.customer_po_use_cases = customer_po_use_cases
+        self.tracker = tracker
 
     async def execute(
         self,
@@ -91,6 +88,62 @@ class ReceiveRestEdiPayload:
         audit_context: AuditContext,
     ) -> RestEdiReceipt:
         self._log_received(command)
+        message, duplicate = await self.tracker.create_received(
+            tenant_id=actor.tenant_id,
+            direction=EdiMessageDirection.INBOUND,
+            source_system="DIRECT_API",
+            source_protocol="REST",
+            document_standard="JSON",
+            document_type=command.document_type,
+            sender_id=command.sender_id,
+            receiver_id=command.receiver_id,
+            external_message_id=command.external_message_id,
+            correlation_id=audit_context.correlation_id,
+        )
+        if duplicate:
+            if message.related_entity_id is None:
+                raise EntityConflict("Duplicate EDI message is not linked to a business document")
+            self._log_duplicate(command, message.related_entity_id)
+            return self._receipt(command, message.related_entity_id, message.id)
+        message = await self.tracker.start_validation(message)
+        try:
+            document, customer = await self._validate_and_resolve(command, actor)
+        except ValidationFailure as error:
+            await self.tracker.validation_failed(
+                message,
+                str(error.details.get("error_code", error.code)),
+                error.message,
+                error.details,
+            )
+            raise
+        message = await self.tracker.validation_passed(message)
+        message = await self.tracker.start_processing(message)
+        received_at = datetime.now(UTC)
+        po_command = self._to_customer_po_command(
+            document, customer, command, received_at, message.id
+        )
+        try:
+            created, _capabilities = await self.customer_po_use_cases.create(
+                po_command, actor, audit_context
+            )
+        except AppError as error:
+            await self.tracker.failed(message, error.code, error.message, error.details)
+            raise
+        except Exception as error:
+            await self.tracker.failed(message, "EDI_PROCESSING_FAILED", str(error))
+            raise
+        message = await self.tracker.link_related_entity(
+            message,
+            EdiRelatedEntityType.CUSTOMER_PO,
+            created.id,
+            created.customer_po_number,
+        )
+        await self.tracker.completed(message)
+        return self._receipt(command, created.id, message.id)
+
+    async def _validate_and_resolve(
+        self, command: ReceiveRestEdiPayloadCommand, actor: CurrentUser
+    ) -> tuple[InboundCustomerPoDocument, Customer]:
         if command.document_type.strip() != "850":
             raise ValidationFailure(
                 "Unsupported EDI document type",
@@ -102,10 +155,6 @@ class ReceiveRestEdiPayload:
             )
         document = command.document
         self._validate_document(document)
-        existing_id = await self._find_existing(command, actor.tenant_id)
-        if existing_id is not None:
-            self._log_duplicate(command, existing_id)
-            return self._receipt(command, existing_id)
         customer = await self.customer_repository.get_by_code(
             document.customer_code, tenant_id=actor.tenant_id
         )
@@ -122,40 +171,19 @@ class ReceiveRestEdiPayload:
                 "EDI Customer PO currency is unavailable",
                 details={"error_code": "EDI_CURRENCY_UNAVAILABLE"},
             )
-        received_at = datetime.now(UTC)
-        po_command = self._to_customer_po_command(document, customer, command, received_at)
-        try:
-            created, _capabilities = await self.customer_po_use_cases.create(
-                po_command, actor, audit_context
-            )
-        except EntityConflict:
-            # CustomerPoUseCases has rolled back its transaction. Re-read the
-            # idempotency identity to distinguish a concurrent retry from a true
-            # business duplicate, preserving the existing conflict otherwise.
-            existing_id = await self._find_existing(command, actor.tenant_id)
-            if existing_id is None:
-                raise
-            self._log_duplicate(command, existing_id)
-            return self._receipt(command, existing_id)
-        return self._receipt(command, created.id)
-
-    async def _find_existing(
-        self, command: ReceiveRestEdiPayloadCommand, tenant_id: UUID
-    ) -> UUID | None:
-        if not command.external_message_id:
-            return None
-        return await self.receipt_resolver.find_edi_by_external_message(
-            tenant_id, command.sender_id, command.external_message_id
-        )
+        return document, customer
 
     @staticmethod
-    def _receipt(command: ReceiveRestEdiPayloadCommand, customer_po_id: UUID) -> RestEdiReceipt:
+    def _receipt(
+        command: ReceiveRestEdiPayloadCommand, customer_po_id: UUID, edi_message_id: UUID
+    ) -> RestEdiReceipt:
         return RestEdiReceipt(
             command.sender_id,
             command.receiver_id,
             command.document_type,
             command.external_message_id,
             customer_po_id,
+            edi_message_id,
         )
 
     @staticmethod
@@ -164,6 +192,7 @@ class ReceiveRestEdiPayload:
         customer: Customer,
         envelope: ReceiveRestEdiPayloadCommand,
         received_at: datetime,
+        edi_message_id: UUID,
     ) -> CreateCustomerPoCommand:
         return CreateCustomerPoCommand(
             customer_id=customer.id,
@@ -185,6 +214,7 @@ class ReceiveRestEdiPayload:
                 )
                 for line in document.lines
             ),
+            edi_message_id=edi_message_id,
             edi_transaction_type=envelope.document_type,
             edi_sender_id=envelope.sender_id,
             edi_receiver_id=envelope.receiver_id,
