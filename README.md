@@ -43,11 +43,11 @@ flowchart TB
     HTTP[HTTP Request] --> P[Presentation<br/>Router + Pydantic Schema]
     P --> A[Application<br/>Use Case + Command/DTO]
     A --> D[Domain<br/>Entity + Repository Contract]
-    I[Infrastructure<br/>SQLAlchemy/PostgreSQL/S3] -->|implements| D
+    I[Infrastructure<br/>SQLAlchemy/PostgreSQL/S3] -->|implements contracts| D
+    I --> DB[(PostgreSQL + RLS)]
     C[app/api/dependencies<br/>Composition Root] --> P
     C --> A
     C --> I
-    D --> DB[(PostgreSQL + RLS)]
 ```
 
 Conceptual dependency direction：
@@ -267,6 +267,18 @@ Permission 使用 `resource.action` code，並帶 `ALLOW`／`DENY` 與 `NONE`、
 `TEAM`、`ALL` scope。Application check 用來提供明確 403／capability；RLS 仍是最後 data-scope
 boundary。被 scope/RLS 隱藏的 entity 通常回 404，以免洩漏存在性。
 
+目前 business/API code 使用的 canonical permission families 如下；新增檢查前應先核對 migration、
+use case 與 tests，不能自行改用近義名稱：
+
+| Resource | Canonical permissions |
+|---|---|
+| Customer | `customers.read`、`customers.detail.read`、`customers.create`、`customers.update`、`customers.delete`、`customers.restore`、`customers.assign_owner`、`customers.export` |
+| Supplier | `suppliers.read`、`suppliers.detail.read`、`suppliers.create`、`suppliers.update`、`suppliers.delete`、`suppliers.restore`、`suppliers.assign_owner`、`suppliers.export` |
+| Product | `products.read`、`products.detail.read`、`products.create`、`products.update`、`products.delete`、`products.restore`、`products.assign_owner`、`products.export` |
+| Customer PO | `customer_pos.read`、`customer_pos.detail.read`、`customer_pos.create`、`customer_pos.update`、`customer_pos.delete`、`customer_pos.restore`、`customer_pos.change_status`、`customer_pos.assign_owner`、`customer_pos.export` |
+| Dashboard / Audit / EDI tracking | `dashboard.customer_pos.read`、`audit.read`、`edi_messages.read`、`edi_messages.detail.read` |
+| IAM read APIs | `users.read`、`groups.read`、`roles.read`、`policies.read`、`permissions.read` |
+
 ### Local authentication modes
 
 - `AUTH_MODE=jwt`：只接受 Bearer JWT，不 fallback 到 dev header。
@@ -401,7 +413,8 @@ app/api/dependencies/<module>.py
 Development flow：
 
 ```text
-Database table/index/FK/RLS/permissions migration
+確認既有 database schema、ownership 與 source of truth
+→ 必要且由本服務擁有的 table/index/FK/RLS/permissions migration
 → Domain entity + repository contract
 → Application command/DTO/use case
 → Infrastructure model/repository
@@ -424,30 +437,11 @@ Database table/index/FK/RLS/permissions migration
 Supplier、Product、Purchase Order、Sales Order 等新 module 優先複製 Customer 的 architectural shape，
 除非有明確 architecture decision 說明差異。
 
-## 14. EDI Development Direction
+## 14. EDI Scope Note
 
-目前已實作 protocol-neutral ERP-side EDI message tracking：`edi_messages`、append-only
-`edi_message_events`、inbound REST 850 → Customer PO processing、technical duplicate detection、message
-search/detail/events 與 Customer PO EDI history。
-
-SCM ERP 只擁有 ERP processing status、business entity linkage 與 external B2B message ID；raw EDI file、
-S3 transport object、AS2 MDN/certificate、SFTP path 與 transport retry 屬外部 B2B platform，不應複製到
-本 repository。
-
-未來功能應保持可分離：
-
-```text
-Transport / inbound（planned outside or adapter boundary）
-Parser（planned）
-Validation
-Mapping
-Business import
-Acknowledgement（planned）
-Operational tracking
-```
-
-不要把 parser、AS2/SFTP、mapping、business import、UI query 全塞進單一 giant router/service。
-Outbound model 已預留 direction/event vocabulary，但 outbound sending 尚未實作。
+Repository 目前已有 ERP-side EDI message tracking 與 inbound REST Customer PO processing；本文件只把
+它們列為現況 module，不定義新的 EDI Log、parser、transport、AS2、SFTP、X12 或 B2B adapter 設計。
+後續 EDI 工作必須另行確認 system ownership 與需求，不由本 architecture guide 擴張 scope。
 
 ## 15. Testing & Quality Gate
 
@@ -522,13 +516,13 @@ configuration keys。
 
 ## 17. Adding a New Module
 
-以 `purchase_orders` 為例：
+以未來的 `<module>` 為例：
 
 1. 先確認 DB ownership、tenant key、RLS policy、FK、indexes、permission codes。
 2. 建立 persistence-independent `PurchaseOrder` entity 與 repository `Protocol`。
 3. 建立 commands/search criteria/DTO/use cases；定義 permission、scope、status transition。
 4. 在 Infrastructure 實作 SQLAlchemy model/repository；不要讓 model 洩漏到 use case。
-5. 在 `app/api/dependencies/purchase_orders.py` 組裝 repository、audit/event、UnitOfWork。
+5. 在 `app/api/dependencies/<module>.py` 組裝 repository、audit/event、UnitOfWork。
 6. 建立 Pydantic schemas 與 thin router。
 7. 在 `app/api/v1/router.py` 註冊 router。
 8. 測試 permission、tenant、validation、conflict、soft delete、optimistic lock 與 RLS。
@@ -577,6 +571,15 @@ configuration keys。
    fail closed，partner credential lifecycle 尚未實作。
 7. **Module shape 尚未完全一致**：Customer/Supplier/Product 接近四層架構；Dashboard 與部分 support
    modules 採較精簡結構。新增 business module 應以 Customer 為準，不應把現有例外當新標準。
+8. **Auth Application 直接依賴 Infrastructure services**：`AuthUseCases` 的 constructor type 與 imports
+   直接使用 `JwtService`、`PasswordHasher`、`RefreshTokenService` concrete classes，尚未像 repository
+   一樣以 domain/application Protocol 隔離；這是現況例外，不應複製到新 business module。
+9. **Alembic autogenerate metadata registration 不完整**：`alembic/env.py` 有載入多數 module models，
+   但目前未載入 Supplier 與 Product model modules；既有 migrations 仍是 versioned schema truth，使用
+   autogenerate 前必須檢查 metadata completeness，不能假設 diff 完整。
+10. **Ruff baseline 尚未全綠**：依本文件的完整 command 執行時，既有
+    `alembic/versions/0001_iam_customer_baseline.py` 仍有 import ordering 與 line-length violations；
+    這是 applied baseline migration 的既存問題，不應在無 migration policy 決策下順手改寫。
 
 ## 20. Definition of Done
 
