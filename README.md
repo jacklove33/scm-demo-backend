@@ -1,40 +1,37 @@
 # SCM Demo Backend
 
-本專案是以 FastAPI、SQLAlchemy 2.x、PostgreSQL 與 Alembic 建構的多租戶 SCM／ERP
-後端。現有 business modules 包含 Customer、Supplier、Product、Customer Purchase Order、
-EDI Message Tracking、Attachment、Dashboard、IAM、Authentication 與 Audit。
+This project is a multi-tenant SCM/ERP backend built with FastAPI, SQLAlchemy 2.x, PostgreSQL, and Alembic. The current business modules include Customer, Supplier, Product, Customer Purchase Order, EDI Message Tracking, Attachment, Dashboard, IAM, Authentication, and Audit.
 
-本文件是 backend architecture、security boundary、module development standard 與本機開發的
-主要工程指南。文件描述的是 repository **目前實際存在**的設計；未完成的方向會明確標示為
-planned，而不是當成已實作功能。
+This document is the primary engineering guide for backend architecture, security boundaries, module development standards, and local development. It describes the design that currently exists in the repository. Incomplete directions are explicitly marked as planned rather than presented as implemented functionality.
 
 ## 1. Project Overview
 
-系統採分層、模組化架構。Customer module 是新增 master-data business module 時的 Golden
-Reference；Supplier 與 Product 已沿用相近模式。核心原則是：
+The system uses a layered, modular architecture. The Customer module is the Golden Reference for new master-data business modules, and Supplier and Product follow a similar pattern.
 
-- HTTP、business orchestration、domain model 與 persistence mechanics 分離。
-- Authentication 證明 identity；IAM 解出 permission 與 data scope。
-- Application permission check 提供明確行為，PostgreSQL RLS 仍是 authoritative data boundary。
-- Tenant 不由任意 request payload 決定。
-- Mutable business data 使用 Optimistic Lock，正常刪除優先採 Soft Delete。
-- FastAPI runtime 使用受限 DB role，不使用 table owner 或 `BYPASSRLS`。
+Core principles:
+
+- Keep HTTP, business orchestration, domain models, and persistence mechanics separate.
+- Authentication proves identity; IAM resolves permissions and data scope.
+- Application-level permission checks provide explicit behavior, while PostgreSQL RLS remains the authoritative data boundary.
+- Tenant identity must not be trusted from arbitrary request payloads.
+- Mutable business data uses Optimistic Locking, and normal deletion should prefer Soft Delete.
+- The FastAPI runtime uses a restricted database role rather than the table owner or a role with `BYPASSRLS`.
 
 ## 2. Tech Stack
 
-| 項目 | 實作 |
+| Area | Implementation |
 |---|---|
 | Runtime | Python 3.12+ |
-| API | FastAPI、Uvicorn、Pydantic Settings |
-| Persistence | SQLAlchemy 2.x async、asyncpg、PostgreSQL |
+| API | FastAPI, Uvicorn, Pydantic Settings |
+| Persistence | SQLAlchemy 2.x async, asyncpg, PostgreSQL |
 | Schema migration | Alembic |
-| Authentication | JWT（PyJWT）或明確的 local `dev_header` mode |
+| Authentication | JWT with PyJWT or explicit local `dev_header` mode |
 | Password hashing | Argon2 |
-| Attachment storage | Private AWS S3、presigned URL |
-| Testing | pytest、pytest-asyncio、HTTPX |
-| Quality | Ruff、mypy strict mode |
+| Attachment storage | Private AWS S3, presigned URLs |
+| Testing | pytest, pytest-asyncio, HTTPX |
+| Quality | Ruff, mypy strict mode |
 
-實際版本範圍與 tool configuration 以 [`pyproject.toml`](pyproject.toml) 為準。
+See [`pyproject.toml`](pyproject.toml) for the actual supported version ranges and tooling configuration.
 
 ## 3. Architecture Overview
 
@@ -50,7 +47,7 @@ flowchart TB
     C --> I
 ```
 
-Conceptual dependency direction：
+Conceptual dependency direction:
 
 ```text
 Presentation
@@ -62,86 +59,83 @@ Domain
 Infrastructure ─────→ Domain contracts
 ```
 
-`app/api/dependencies/` 是 Composition Root：它可以同時知道 application interface 與 concrete
-infrastructure，負責組裝 dependency。Business layer 不應反向依賴 FastAPI router。
+`app/api/dependencies/` is the Composition Root. It may know both application interfaces and concrete infrastructure implementations and is responsible for dependency wiring. Business layers must not depend back on FastAPI routers.
 
 ### Domain
 
-位置：`app/modules/<module>/domain/`
+Location: `app/modules/<module>/domain/`
 
-責任：
+Responsibilities:
 
-- Business entities、business value normalization／validation。
-- Search criteria、access facts、repository `Protocol`／contract。
-- Persistence-framework-independent business vocabulary。
+- Business entities and business value normalization/validation.
+- Search criteria, access facts, repository `Protocol` contracts.
+- Persistence-framework-independent business vocabulary.
 
-限制：
+Constraints:
 
-- 不 import FastAPI、Pydantic HTTP schema 或 SQLAlchemy。
-- 不讀取 HTTP request，不執行 SQL。
-- 不把 ORM model 當 domain entity。
+- Do not import FastAPI, Pydantic HTTP schemas, or SQLAlchemy.
+- Do not read HTTP requests or execute SQL.
+- Do not treat ORM models as domain entities.
 
-例子：
+Examples:
 
-- `app/modules/customers/domain/entities.py` 的 `Customer`、`CustomerAddress`。
-- `app/modules/customers/domain/repository.py` 的 `CustomerRepository`。
+- `Customer` and `CustomerAddress` in `app/modules/customers/domain/entities.py`.
+- `CustomerRepository` in `app/modules/customers/domain/repository.py`.
 
 ### Application
 
-位置：`app/modules/<module>/application/`
+Location: `app/modules/<module>/application/`
 
-責任：
+Responsibilities:
 
-- Use case orchestration。
-- Permission checks、domain rules、transaction intent、audit/event coordination。
-- 將 command 轉為 domain operation，產生 DTO／application result。
-- 依賴 domain repository contract，而非在 use case 內撰寫 SQL query。
+- Use-case orchestration.
+- Permission checks, domain rules, transaction intent, and audit/event coordination.
+- Convert commands into domain operations and produce DTO/application results.
+- Depend on domain repository contracts rather than writing SQL inside use cases.
 
-限制：
+Constraints:
 
-- 不包含 FastAPI route、`Depends` 或 HTTP response construction。
-- 不包含 SQLAlchemy query implementation。
-- 不從 request 接受可信的 tenant、role 或 effective permission。
+- Do not include FastAPI routes, `Depends`, or HTTP response construction.
+- Do not include SQLAlchemy query implementation.
+- Do not trust tenant, role, or effective permissions supplied directly by the request.
 
-`CustomerUseCases` 是目前 master-data use case 的主要參考。
+`CustomerUseCases` is the current primary reference for master-data use cases.
 
 ### Infrastructure
 
-位置：`app/modules/<module>/infrastructure/`
+Location: `app/modules/<module>/infrastructure/`
 
-責任：
+Responsibilities:
 
-- SQLAlchemy models 與 mappings。
-- Concrete repository、PostgreSQL-specific query 與 persistence mechanics。
-- S3 等 external infrastructure adapter。
-- 實作 domain repository contracts。
+- SQLAlchemy models and mappings.
+- Concrete repositories, PostgreSQL-specific queries, and persistence mechanics.
+- External infrastructure adapters such as S3.
+- Implement domain repository contracts.
 
-目前 `SqlAlchemyCustomerRepository` 使用 SQLAlchemy ORM/Core query；repository 中**沒有** Customer
-PostgreSQL RPC 呼叫。若未來導入既有 RPC，adapter 仍應留在 Infrastructure，並維持相同 domain
-contract。
+`SqlAlchemyCustomerRepository` currently uses SQLAlchemy ORM/Core queries. There are no Customer-specific PostgreSQL RPC calls in the repository. If an existing RPC is introduced later, the adapter should remain in Infrastructure while preserving the same domain contract.
 
 ### Presentation
 
-位置：`app/modules/<module>/presentation/`
+Location: `app/modules/<module>/presentation/`
 
-責任：
+Responsibilities:
 
-- FastAPI `APIRouter`。
-- Pydantic request／response schemas。
-- Query/header/path parsing 與 HTTP status／response mapping。
-- 將 HTTP input 轉為 application command，再呼叫 use case。
+- FastAPI `APIRouter` definitions.
+- Pydantic request/response schemas.
+- Query/header/path parsing and HTTP status/response mapping.
+- Convert HTTP input into application commands before calling use cases.
 
-限制：
+Constraints:
 
-- 不直接寫 SQL。
-- 不直接操作 SQLAlchemy model。
-- 不成為 permission、validation 或 business-rule layer。
+- Do not write SQL directly.
+- Do not manipulate SQLAlchemy models directly.
+- Do not become the permission, validation, or business-rule layer.
 
-### API dependency / composition layer
+### API Dependency / Composition Layer
 
-位置：`app/api/dependencies/`
+Location: `app/api/dependencies/`
 
-典型 wiring：
+Typical wiring:
 
 ```text
 FastAPI Router
@@ -153,22 +147,21 @@ CustomerUseCases(CustomerRepository, AuditWriter, UnitOfWork)
 SqlAlchemyCustomerRepository(session)
 ```
 
-共用 request session 由 `app/infrastructure/database/session.py` 提供。Router registration 集中在
-`app/api/v1/router.py`。
+The shared request session is provided by `app/infrastructure/database/session.py`. Router registration is centralized in `app/api/v1/router.py`.
 
 ## 4. Directory Structure
 
 ```text
 app/
-├── main.py                         # App startup、middleware、root router
+├── main.py                         # App startup, middleware, root router
 ├── api/
 │   ├── dependencies/               # Composition Root / dependency providers
 │   └── v1/router.py                # Module router registration
-├── core/                           # Config、logging、exceptions、error handlers
-├── infrastructure/database/        # Async session、Base、UnitOfWork
+├── core/                           # Config, logging, exceptions, error handlers
+├── infrastructure/database/        # Async session, Base, UnitOfWork
 ├── shared/
 │   ├── application/                # Shared application contracts/helpers
-│   └── domain/                     # CurrentUser、permission scope/effect
+│   └── domain/                     # CurrentUser, permission scope/effect
 └── modules/
     └── <module>/
         ├── domain/
@@ -184,27 +177,26 @@ tests/unit/                          # Current automated test suite
 
 ## 5. Dependency Rules
 
-允許：
+Allowed:
 
-- Presentation → Application／Domain types。
-- Application → Domain contracts、shared application/domain abstractions。
-- Infrastructure → Domain contracts/entities。
-- Composition Root → Application + Infrastructure concrete implementations。
+- Presentation → Application / Domain types.
+- Application → Domain contracts and shared application/domain abstractions.
+- Infrastructure → Domain contracts/entities.
+- Composition Root → Application + Infrastructure concrete implementations.
 
-避免：
+Avoid:
 
-- Domain → FastAPI／SQLAlchemy／Pydantic HTTP schema。
-- Application use case → concrete SQLAlchemy repository。
-- Router → ORM model 或 database session query。
-- Repository → UI capability decisions。
-- 任意 business module 直接複製 IAM resolution 或 RLS setup。
+- Domain → FastAPI / SQLAlchemy / Pydantic HTTP schemas.
+- Application use cases → concrete SQLAlchemy repositories.
+- Router → ORM model or database session query.
+- Repository → UI capability decisions.
+- Business modules duplicating IAM resolution or RLS setup.
 
-跨 module orchestration 有時是必要的，例如 inbound EDI 使用既有 `CustomerPoUseCases.create()`；應維持
-明確 application boundary，避免跨 module 直接存取對方 ORM table。
+Cross-module orchestration is sometimes necessary. For example, inbound EDI calls the existing `CustomerPoUseCases.create()` boundary. Keep a clear application boundary and avoid accessing another module's ORM tables directly.
 
 ## 6. Request Lifecycle
 
-一般 ERP request：
+Typical ERP request:
 
 ```mermaid
 sequenceDiagram
@@ -231,13 +223,13 @@ sequenceDiagram
     Router-->>Client: HTTP response
 ```
 
-`LoggingMiddleware` 建立 request/correlation context；central error handler 產生一致 error envelope。
+`LoggingMiddleware` creates the request/correlation context, and the centralized error handler produces a consistent error envelope.
 
 ## 7. Authentication / Authorization / RLS
 
-### ERP interactive identity
+### ERP Interactive Identity
 
-實際流程：
+Actual flow:
 
 ```text
 Bearer JWT
@@ -252,7 +244,7 @@ Bearer JWT
 → repository query under PostgreSQL RLS
 ```
 
-參考：
+References:
 
 - `app/api/dependencies/auth.py`
 - `app/api/dependencies/identity.py`
@@ -260,71 +252,62 @@ Bearer JWT
 - `app/modules/iam/application/permission_resolver.py`
 - `app/shared/domain/current_user.py`
 
-`AuthenticatedPrincipal` 只證明「誰在呼叫」；tenant、active status、role、group、policy 與 effective
-permissions 由 DB 載入。不得信任 frontend 自報的 tenant／role／permission。
+`AuthenticatedPrincipal` only proves who is calling. Tenant, active status, role, group, policy, and effective permissions are loaded from the database. Never trust tenant, role, or permission values reported by the frontend.
 
-Permission 使用 `resource.action` code，並帶 `ALLOW`／`DENY` 與 `NONE`、`OWN`、`ASSIGNED`、
-`TEAM`、`ALL` scope。Application check 用來提供明確 403／capability；RLS 仍是最後 data-scope
-boundary。被 scope/RLS 隱藏的 entity 通常回 404，以免洩漏存在性。
+Permissions use `resource.action` codes with `ALLOW` / `DENY` effects and `NONE`, `OWN`, `ASSIGNED`, `TEAM`, and `ALL` scopes. Application checks provide explicit 403/capability behavior; RLS remains the final data-scope boundary. Entities hidden by scope or RLS normally return 404 to avoid existence disclosure.
 
-目前 business/API code 使用的 canonical permission families 如下；新增檢查前應先核對 migration、
-use case 與 tests，不能自行改用近義名稱：
+Canonical permission families currently used by backend code are listed below. Before adding a new permission check, verify migrations, use cases, and tests rather than inventing a near-synonym.
 
 | Resource | Canonical permissions |
 |---|---|
-| Customer | `customers.read`、`customers.detail.read`、`customers.create`、`customers.update`、`customers.delete`、`customers.restore`、`customers.assign_owner`、`customers.export` |
-| Supplier | `suppliers.read`、`suppliers.detail.read`、`suppliers.create`、`suppliers.update`、`suppliers.delete`、`suppliers.restore`、`suppliers.assign_owner`、`suppliers.export` |
-| Product | `products.read`、`products.detail.read`、`products.create`、`products.update`、`products.delete`、`products.restore`、`products.assign_owner`、`products.export` |
-| Customer PO | `customer_pos.read`、`customer_pos.detail.read`、`customer_pos.create`、`customer_pos.update`、`customer_pos.delete`、`customer_pos.restore`、`customer_pos.change_status`、`customer_pos.assign_owner`、`customer_pos.export` |
-| Dashboard / Audit / EDI tracking | `dashboard.customer_pos.read`、`audit.read`、`edi_messages.read`、`edi_messages.detail.read` |
-| IAM read APIs | `users.read`、`groups.read`、`roles.read`、`policies.read`、`permissions.read` |
+| Customer | `customers.read`, `customers.detail.read`, `customers.create`, `customers.update`, `customers.delete`, `customers.restore`, `customers.assign_owner`, `customers.export` |
+| Supplier | `suppliers.read`, `suppliers.detail.read`, `suppliers.create`, `suppliers.update`, `suppliers.delete`, `suppliers.restore`, `suppliers.assign_owner`, `suppliers.export` |
+| Product | `products.read`, `products.detail.read`, `products.create`, `products.update`, `products.delete`, `products.restore`, `products.assign_owner`, `products.export` |
+| Customer PO | `customer_pos.read`, `customer_pos.detail.read`, `customer_pos.create`, `customer_pos.update`, `customer_pos.delete`, `customer_pos.restore`, `customer_pos.change_status`, `customer_pos.assign_owner`, `customer_pos.export` |
+| Dashboard / Audit / EDI tracking | `dashboard.customer_pos.read`, `audit.read`, `edi_messages.read`, `edi_messages.detail.read` |
+| IAM read APIs | `users.read`, `groups.read`, `roles.read`, `policies.read`, `permissions.read` |
 
-### Local authentication modes
+### Local Authentication Modes
 
-- `AUTH_MODE=jwt`：只接受 Bearer JWT，不 fallback 到 dev header。
-- `AUTH_MODE=dev_header`：local development 可使用 `X-Dev-User-Id`。
-- EDI inbound 使用獨立 `EDI_INBOUND_AUTH_MODE`；`dev_no_auth` 只允許 local/test，仍載入設定的
-  existing IAM user 並建立相同 RLS context。`api_key` mode 目前 fail closed，完整 B2B credential
-  lifecycle 尚未實作。
+- `AUTH_MODE=jwt`: accepts Bearer JWT only and does not fall back to the dev header.
+- `AUTH_MODE=dev_header`: local development may use `X-Dev-User-Id`.
+- EDI inbound uses a separate `EDI_INBOUND_AUTH_MODE`. `dev_no_auth` is allowed only for local/test environments; it still loads the configured existing IAM user and establishes the same RLS context. `api_key` mode currently fails closed because the full B2B credential lifecycle is not implemented yet.
 
-### Multi-tenant rules
+### Multi-Tenant Rules
 
-- Tenant-scoped business data 必須同時遵守 application scope 與 DB RLS。
-- Caller-supplied tenant ID 不能成為 trust boundary。
-- Repository 不得關閉、弱化或繞過 RLS。
-- Admin 代表 permission/scope 設計，不代表可使用 table owner bypass tenant。
-- 跨 tenant composite FK／unique/index 應包含 tenant identity（依資料模型適用性）。
+- Tenant-scoped business data must obey both application scope and database RLS.
+- Caller-supplied tenant IDs must not become a trust boundary.
+- Repositories must not disable, weaken, or bypass RLS.
+- Admin means permission/scope design, not permission to use the table owner to bypass tenant isolation.
+- Cross-tenant composite FKs, unique constraints, and indexes should include tenant identity where appropriate to the data model.
 
 ## 8. Database Ownership
 
-FastAPI startup **不呼叫** `Base.metadata.create_all()`。`app/main.py` 只設定 logging、middleware、
-error handlers 與 router；不在 runtime 自動重建 schema。
+FastAPI startup does **not** call `Base.metadata.create_all()`. `app/main.py` only configures logging, middleware, error handlers, and routers; it does not recreate schema at runtime.
 
-目前 repository 的 schema、RLS policy、permission seed 與 demo seed 以 versioned Alembic migrations
-管理。SQLAlchemy models 映射 PostgreSQL structures；production baseline 的變更必須透過受審查的
-database migration 與既有 Supabase/PostgreSQL deployment 流程，而不是由 app startup 猜測或重建。
+The repository manages schema, RLS policies, permission seeds, and demo seeds through versioned Alembic migrations. SQLAlchemy models map PostgreSQL structures. Production baseline changes must go through reviewed database migrations and the existing Supabase/PostgreSQL deployment process rather than being inferred or rebuilt by application startup.
 
-DB roles：
+Database roles:
 
-- `MIGRATION_DATABASE_URL`：schema owner（local example 為 `scm_owner`），僅供 Alembic。
-- `DATABASE_URL`：FastAPI restricted runtime role（local example 為 `app_runtime`）。
-- Runtime role 不得擁有 application tables，不得有 `BYPASSRLS`。
-- 不得將 production password、JWT secret、AWS credential 或 service-role credential commit。
+- `MIGRATION_DATABASE_URL`: schema owner, for example `scm_owner`, used only by Alembic.
+- `DATABASE_URL`: restricted FastAPI runtime role, for example `app_runtime`.
+- The runtime role must not own application tables and must not have `BYPASSRLS`.
+- Never commit production passwords, JWT secrets, AWS credentials, service-role credentials, or private keys.
 
-Local role bootstrap 參考 `sql/README.md`；migration source 位於 `alembic/versions/`。
+See `sql/README.md` for local role bootstrap instructions. Migration sources live in `alembic/versions/`.
 
 ## 9. Customer Reference Module
 
-Customer 是未來 master-data module 的 Golden Reference：
+Customer is the Golden Reference for future master-data modules:
 
-1. Domain `Customer` 保持 ORM-independent，並負責 code/name normalization。
-2. `CustomerRepository` Protocol 描述 search、access facts、CRUD、soft-delete/restore。
-3. `CustomerUseCases` 執行 permission、scope、business validation、audit 與 transaction orchestration。
-4. `SqlAlchemyCustomerRepository` 將 scope 轉成 SQLAlchemy query，並 mapping Business Partner tables。
-5. `get_customer_use_cases()` 注入 repository、AuditWriter 與 UnitOfWork。
-6. Router 將 request schema 轉成 command，不直接做 persistence。
+1. The domain `Customer` remains ORM-independent and owns code/name normalization.
+2. `CustomerRepository` defines search, access facts, CRUD, soft-delete, and restore behavior.
+3. `CustomerUseCases` performs permission checks, scope checks, business validation, audit handling, and transaction orchestration.
+4. `SqlAlchemyCustomerRepository` converts scope into SQLAlchemy queries and maps Business Partner tables.
+5. `get_customer_use_cases()` injects the repository, `AuditWriter`, and `UnitOfWork`.
+6. The router converts request schemas into commands and does not perform persistence directly.
 
-Customer 實際建立的是 Business Partner master data：
+Customer records are implemented as Business Partner master data:
 
 ```text
 business_partners
@@ -333,26 +316,23 @@ partner_addresses
 customer_user_assignments / customer_group_assignments
 ```
 
-Customer 與 Supplier 可透過 `partner_roles` 成為同一 Business Partner 的多角色，不應再建立第二套
-standalone Customer/Supplier master table。
+Customer and Supplier may represent multiple roles on the same Business Partner through `partner_roles`. Do not create a second standalone Customer/Supplier master table for the same party.
 
 ## 10. Soft Delete Standard
 
-Customer 的刪除語意是停用 `CUSTOMER` partner role，而非刪除 shared Business Partner：
+Customer deletion means deactivating the `CUSTOMER` partner role rather than deleting the shared Business Partner:
 
-- Normal search 隱藏 role `deleted_at` 不為 null 的 Customer。
-- `show_deleted=true` 提供明確查詢行為。
-- `POST /customers/{id}/soft-delete` 軟刪除。
-- `POST /customers/{id}/restore` 還原。
-- Delete/restore 同樣檢查 permission、scope 與 `row_version`。
+- Normal search hides Customers whose role `deleted_at` is not null.
+- `show_deleted=true` provides explicit access to deleted records.
+- `POST /customers/{id}/soft-delete` performs soft delete.
+- `POST /customers/{id}/restore` restores the record.
+- Delete/restore operations also check permission, scope, and `row_version`.
 
-Supplier、Product、Customer PO 等正常 master/business entities 也採 soft-delete/restore pattern。除非
-domain 明確要求，不要隨意新增 hard-delete UI/API。Child line replacement、temporary token cleanup 等
-technical lifecycle 可依實際 domain 採不同策略。
+Supplier, Product, Customer PO, and similar master/business entities follow the same soft-delete/restore pattern. Do not introduce hard-delete UI/API behavior unless the domain explicitly requires it. Technical lifecycles such as replacing child lines or cleaning up temporary tokens may use different strategies where appropriate.
 
 ## 11. Optimistic Lock
 
-Mutable records 使用 `row_version` 與 `expected_version`：
+Mutable records use `row_version` and `expected_version`:
 
 ```text
 Client reads row_version = N
@@ -362,15 +342,13 @@ Client reads row_version = N
 → no matching row: VersionConflict → HTTP 409
 ```
 
-新增 mutable master/business entity 時，若存在 concurrent update 風險，應沿用此 pattern。禁止在
-版本不符時靜默覆寫較新的 DB state。
+New mutable master/business entities should follow this pattern when concurrent updates are possible. Never silently overwrite a newer database state when versions do not match.
 
 ## 12. Error Handling
 
-Project exceptions 定義於 `app/core/exceptions.py`，包含 authentication、permission、not found、
-version conflict、entity conflict、validation 與 external service errors。
+Project exceptions are defined in `app/core/exceptions.py` and include authentication, permission, not-found, version-conflict, entity-conflict, validation, and external-service errors.
 
-`app/core/error_handlers.py` 將 `AppError` 統一映射為：
+`app/core/error_handlers.py` maps `AppError` consistently to:
 
 ```json
 {
@@ -384,12 +362,11 @@ version conflict、entity conflict、validation 與 external service errors。
 }
 ```
 
-Domain/application code 應 raise meaningful project exception；不要在深層 use case/repository 建構
-`JSONResponse` 或任意 FastAPI exception。HTTP mapping 留在 centralized handler/presentation boundary。
+Domain/application code should raise meaningful project exceptions. Do not build `JSONResponse` objects or arbitrary FastAPI exceptions inside deep use cases or repositories. Keep HTTP mapping in the centralized handler/presentation boundary.
 
 ## 13. Module Development Standard
 
-建議結構（只建立實際需要的檔案，不為空功能過度 scaffold）：
+Recommended structure. Create only files that are actually needed; do not over-scaffold empty functionality:
 
 ```text
 app/modules/<module>/
@@ -410,11 +387,11 @@ app/modules/<module>/
 app/api/dependencies/<module>.py
 ```
 
-Development flow：
+Development flow:
 
 ```text
-確認既有 database schema、ownership 與 source of truth
-→ 必要且由本服務擁有的 table/index/FK/RLS/permissions migration
+Confirm existing database schema, ownership, and source of truth
+→ Create only necessary service-owned migrations for tables/indexes/FKs/RLS/permissions
 → Domain entity + repository contract
 → Application command/DTO/use case
 → Infrastructure model/repository
@@ -425,27 +402,26 @@ Development flow：
 → Frontend integration
 ```
 
-每一層的 review 問題：
+Layer review questions:
 
-- Business invariant 是否在 Domain/Application，而非 router？
-- Application 是否只依賴 repository contract？
-- SQLAlchemy/Postgres code 是否只在 Infrastructure/migration？
-- Tenant、permission、scope、RLS 是否都被保留？
-- Mutation 是否需要 audit、event、transaction、optimistic lock、soft delete？
-- Pydantic schema 是否只是 transport contract？
+- Are business invariants implemented in Domain/Application rather than routers?
+- Does Application depend only on repository contracts?
+- Is SQLAlchemy/PostgreSQL code confined to Infrastructure/migrations?
+- Are tenant, permission, scope, and RLS rules preserved?
+- Do mutations need audit, event, transaction, optimistic lock, or soft-delete handling?
+- Are Pydantic schemas used only as transport contracts?
 
-Supplier、Product、Purchase Order、Sales Order 等新 module 優先複製 Customer 的 architectural shape，
-除非有明確 architecture decision 說明差異。
+For new Supplier, Product, Purchase Order, Sales Order, and similar modules, prefer the Customer architectural shape unless there is an explicit architecture decision documenting why the module differs.
 
 ## 14. EDI Scope Note
 
-Repository 目前已有 ERP-side EDI message tracking 與 inbound REST Customer PO processing；本文件只把
-它們列為現況 module，不定義新的 EDI Log、parser、transport、AS2、SFTP、X12 或 B2B adapter 設計。
-後續 EDI 工作必須另行確認 system ownership 與需求，不由本 architecture guide 擴張 scope。
+The repository currently contains ERP-side EDI message tracking and inbound REST Customer PO processing. This document only records those capabilities as current modules. It does not define new EDI Log, parser, transport, AS2, SFTP, X12, or B2B adapter architecture.
+
+Future EDI work must confirm system ownership and requirements separately rather than expanding scope based on this architecture guide alone.
 
 ## 15. Testing & Quality Gate
 
-安裝 dev dependencies 後，repository 支援：
+After installing development dependencies, the repository supports:
 
 ```bash
 .venv/bin/pytest -q
@@ -454,32 +430,30 @@ Repository 目前已有 ERP-side EDI message tracking 與 inbound REST Customer 
 git diff --check
 ```
 
-也可在已啟用 virtualenv 後省略 `.venv/bin/`。
+When a virtual environment is already activated, the `.venv/bin/` prefix may be omitted.
 
-新 business module 至少應覆蓋：
+A new business module should cover at least:
 
-- Domain normalization、invariant 與 status transition。
-- Use-case success、permission denied、validation、not-found。
-- Optimistic-lock 409（適用時）。
-- Soft-delete/restore（適用時）。
-- Repository mapping/query contract。
-- API request/response contract。
-- Transaction rollback 與 audit/event consistency（適用時）。
+- Domain normalization, invariants, and status transitions.
+- Use-case success, permission denied, validation, and not-found behavior.
+- Optimistic-lock 409 where applicable.
+- Soft-delete/restore where applicable.
+- Repository mapping/query contracts.
+- API request/response contracts.
+- Transaction rollback and audit/event consistency where applicable.
 
-`tests/unit/` 目前主要是 isolated unit/API contract/static migration tests；這不等同使用 restricted
-runtime role 驗證真實 PostgreSQL policy。凡 security 依賴 RLS、composite tenant FK 或 transaction-local
-`set_config` 時，應另有真 DB integration test，驗證 cross-tenant rows 不可見且不可寫入。
+`tests/unit/` currently focuses primarily on isolated unit tests, API contract tests, and static migration tests. This is not equivalent to verifying real PostgreSQL policies with the restricted runtime role. Whenever security depends on RLS, composite tenant FKs, or transaction-local `set_config`, add real database integration tests that verify cross-tenant rows cannot be read or written.
 
-不要因 unit test 中手動傳入 `tenant_id` 就宣稱 RLS 已被測試。
+Do not claim RLS is tested merely because a unit test manually passes a `tenant_id`.
 
 ## 16. Environment / Local Startup
 
 ### Prerequisites
 
 - Python 3.12+
-- PostgreSQL database（example：`scm_local`）
-- Schema/migration role（example：`scm_owner`）
-- Restricted runtime role（example：`app_runtime`）
+- PostgreSQL database, for example `scm_local`
+- Schema/migration role, for example `scm_owner`
+- Restricted runtime role, for example `app_runtime`
 
 ### Setup
 
@@ -490,108 +464,88 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-請替換 `.env` 中的 local credentials；不要提交 `.env`。Local DB role 建立方式見
-`sql/README.md`。
+Replace local credentials in `.env` and do not commit `.env`. See `sql/README.md` for local database role creation.
 
-### Migrate and run
+### Migrate and Run
 
 ```bash
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-- Health：`GET http://127.0.0.1:8000/health`
-- Swagger：`http://127.0.0.1:8000/docs`
+- Health: `GET http://127.0.0.1:8000/health`
+- Swagger: `http://127.0.0.1:8000/docs`
 
-### Local users and passwords
+### Local Users and Passwords
 
-Migration 提供 deterministic demo profiles。不要把 plaintext password 放進 migration/source；使用：
+Migrations provide deterministic demo profiles. Do not put plaintext passwords in migrations or source code. Use:
 
 ```bash
 APP_ENV=local .venv/bin/python scripts/set_dev_password.py jack@local.test
 ```
 
-JWT mode 的 `JWT_SECRET` 至少 32 bytes。`.env.example` 同時記錄 JWT、logging、S3 與 attachment
-configuration keys。
+In JWT mode, `JWT_SECRET` must be at least 32 bytes. `.env.example` also documents JWT, logging, S3, and attachment configuration keys.
 
 ## 17. Adding a New Module
 
-以未來的 `<module>` 為例：
+For a future `<module>`:
 
-1. 先確認 DB ownership、tenant key、RLS policy、FK、indexes、permission codes。
-2. 建立 persistence-independent `PurchaseOrder` entity 與 repository `Protocol`。
-3. 建立 commands/search criteria/DTO/use cases；定義 permission、scope、status transition。
-4. 在 Infrastructure 實作 SQLAlchemy model/repository；不要讓 model 洩漏到 use case。
-5. 在 `app/api/dependencies/<module>.py` 組裝 repository、audit/event、UnitOfWork。
-6. 建立 Pydantic schemas 與 thin router。
-7. 在 `app/api/v1/router.py` 註冊 router。
-8. 測試 permission、tenant、validation、conflict、soft delete、optimistic lock 與 RLS。
+1. Confirm database ownership, tenant key, RLS policy, FKs, indexes, and permission codes.
+2. Create a persistence-independent `PurchaseOrder` entity and repository `Protocol`.
+3. Create commands, search criteria, DTOs, and use cases; define permission, scope, and status transitions.
+4. Implement the SQLAlchemy model/repository in Infrastructure; do not leak ORM models into use cases.
+5. Wire the repository, audit/event handling, and `UnitOfWork` in `app/api/dependencies/<module>.py`.
+6. Create Pydantic schemas and a thin router.
+7. Register the router in `app/api/v1/router.py`.
+8. Test permission, tenant isolation, validation, conflicts, soft delete, optimistic lock, and RLS.
 
-如果新功能跨 module，優先呼叫對方 application boundary；不要 raw insert 對方 business table。
+If a new feature crosses module boundaries, prefer calling the other module's application boundary rather than raw-inserting into its business tables.
 
 ## 18. Prohibited Patterns
 
-**DO NOT：**
+**DO NOT:**
 
-- 在 FastAPI router 內寫 SQL 或直接操作 ORM model。
-- 把 SQLAlchemy model 放進 Domain。
-- 在 Domain entity import FastAPI/Pydantic HTTP schema。
-- 把 permission/business rule 堆進 router。
-- 讓 application use case bypass repository contract 直接 query DB。
-- 信任 frontend 傳入的 tenant、role、permission 或 active status。
-- bypass/disable PostgreSQL RLS，或加入 ad-hoc tenant bypass。
-- 以 table owner、migration role 或 `BYPASSRLS` role 執行 FastAPI。
-- 在 production baseline 呼叫 `Base.metadata.create_all()`。
-- commit DB password、JWT secret、AWS/service-role credential 或 private key。
-- 靜默繞過 `row_version`／Optimistic Lock。
-- 對正常 business/master data 隨意加入 hard delete。
-- 為每個 module 創造互不相容的第二套 architecture。
-- 為了方便測試而在 EDI/application code 自動建立缺少的 Customer。
+- Write SQL or manipulate ORM models directly inside FastAPI routers.
+- Put SQLAlchemy models in Domain.
+- Import FastAPI/Pydantic HTTP schemas into Domain entities.
+- Put permission or business rules into routers.
+- Let application use cases bypass repository contracts and query the database directly.
+- Trust tenant, role, permission, or active status supplied by the frontend.
+- Bypass or disable PostgreSQL RLS, or add ad-hoc tenant bypasses.
+- Run FastAPI with the table owner, migration role, or a `BYPASSRLS` role.
+- Call `Base.metadata.create_all()` in the production baseline.
+- Commit database passwords, JWT secrets, AWS/service-role credentials, or private keys.
+- Silently bypass `row_version` / Optimistic Lock checks.
+- Add hard delete casually to normal business/master data.
+- Create a second incompatible architecture for each module.
+- Automatically create a missing Customer from EDI/application code for test convenience.
 
 ## 19. Known Gaps / Architectural Debt
 
-以下均是 repository review 可直接確認的現況，本文件不在 documentation task 中修改 production code：
+The following items are directly observable in the repository. This documentation task does not modify production code:
 
-1. **DB/RLS integration test coverage 不完整**：現有 automated suite 集中在 `tests/unit/`；尚未形成
-   一套明確、獨立、以 restricted `app_runtime` 驗證 cross-tenant RLS 的 integration test suite。
-2. **部分跨 module application coupling**：EDI inbound 直接依賴 concrete `CustomerPoUseCases`；Audit
-   diff service 直接知道 Product/Supplier entities；Dashboard domain/application 直接引用 Customer PO
-   vocabulary。這些是現有 orchestration，擴張前應評估 boundary contract，而非繼續任意擴散。
-3. **Customer application 的 supporting services 並非全為 Protocol**：repository 與 UnitOfWork 有
-   contract，但 `AuditWriter`／`AuditDiffService` 以 concrete application classes 注入。測試仍可替換，
-   但 dependency inversion 不完全一致。
-4. **Customer RPC premise 與程式不符**：Customer infrastructure 目前是 SQLAlchemy ORM/Core，沒有
-   repository-owned PostgreSQL RPC adapter。若 production 另有外部 RPC baseline，本 repo 尚未建立
-   對應 adapter/contract，也不能由 README 宣稱已整合。
-5. **Permission naming 的 repo 內狀態**：backend migration、use case 與 tests 一致使用
-   `customers.read`、`customers.detail.read`，搜尋不到 `customers.view`。本 repo 不含 frontend，故無法
-   證實或排除 frontend/其他 repo 使用 `customers.view`；跨 repo contract 仍需在 integration 時核對。
-6. **Authentication provider scope**：JWT verification、local passwords 與 refresh token 已實作；完整
-   external IdP/Supabase Auth provisioning flow 並未由本 repo 展示。EDI `api_key` mode 目前明確
-   fail closed，partner credential lifecycle 尚未實作。
-7. **Module shape 尚未完全一致**：Customer/Supplier/Product 接近四層架構；Dashboard 與部分 support
-   modules 採較精簡結構。新增 business module 應以 Customer 為準，不應把現有例外當新標準。
-8. **Auth Application 直接依賴 Infrastructure services**：`AuthUseCases` 的 constructor type 與 imports
-   直接使用 `JwtService`、`PasswordHasher`、`RefreshTokenService` concrete classes，尚未像 repository
-   一樣以 domain/application Protocol 隔離；這是現況例外，不應複製到新 business module。
-9. **Alembic autogenerate metadata registration 不完整**：`alembic/env.py` 有載入多數 module models，
-   但目前未載入 Supplier 與 Product model modules；既有 migrations 仍是 versioned schema truth，使用
-   autogenerate 前必須檢查 metadata completeness，不能假設 diff 完整。
-10. **Ruff baseline 尚未全綠**：依本文件的完整 command 執行時，既有
-    `alembic/versions/0001_iam_customer_baseline.py` 仍有 import ordering 與 line-length violations；
-    這是 applied baseline migration 的既存問題，不應在無 migration policy 決策下順手改寫。
+1. **Incomplete DB/RLS integration test coverage**: the automated suite is concentrated under `tests/unit/`; there is not yet a clearly separated integration-test suite that verifies cross-tenant RLS behavior using restricted `app_runtime`.
+2. **Some cross-module application coupling**: EDI inbound directly depends on concrete `CustomerPoUseCases`; the Audit diff service directly knows Product/Supplier entities; Dashboard domain/application directly references Customer PO vocabulary. These are current orchestration choices. Evaluate boundary contracts before expanding them further.
+3. **Some Customer application supporting services are concrete rather than Protocols**: repository and `UnitOfWork` have contracts, but `AuditWriter` / `AuditDiffService` are injected as concrete application classes. Tests can still substitute them, but dependency inversion is not fully consistent.
+4. **Customer RPC premise does not match the current code**: Customer infrastructure currently uses SQLAlchemy ORM/Core and has no repository-owned PostgreSQL RPC adapter. If production has an external RPC baseline, this repository does not yet expose the corresponding adapter/contract and the README must not claim that it does.
+5. **Permission naming state inside this repository**: backend migrations, use cases, and tests consistently use `customers.read` and `customers.detail.read`; `customers.view` is not present. This repository does not include the frontend, so usage in another repository cannot be confirmed here and must be checked during integration.
+6. **Authentication provider scope**: JWT verification, local passwords, and refresh tokens are implemented. A full external IdP/Supabase Auth provisioning flow is not shown by this repository. EDI `api_key` mode currently fails closed because the partner credential lifecycle is not implemented.
+7. **Module shapes are not fully uniform**: Customer/Supplier/Product are close to the four-layer architecture, while Dashboard and some support modules use a leaner structure. New business modules should use Customer as the default reference rather than treating current exceptions as the new standard.
+8. **Auth Application depends directly on Infrastructure services**: `AuthUseCases` constructor types/imports use concrete `JwtService`, `PasswordHasher`, and `RefreshTokenService` classes instead of domain/application Protocols. This is an existing exception and should not be copied into new business modules.
+9. **Alembic autogenerate metadata registration is incomplete**: `alembic/env.py` loads most module models but does not currently load Supplier and Product model modules. Existing migrations remain the versioned schema truth. Verify metadata completeness before relying on autogenerate diffs.
+10. **Ruff baseline is not fully green**: the full documented command still reports import-ordering and line-length violations in the existing `alembic/versions/0001_iam_customer_baseline.py`. This is existing debt in an applied baseline migration and should not be rewritten casually without a migration-policy decision.
 
 ## 20. Definition of Done
 
-一個 substantial backend change 在 push 前應確認：
+Before pushing a substantial backend change, verify:
 
-- 需求與 system ownership boundary 已確認，沒有實作到錯誤系統。
-- Layer placement 與 dependency direction 符合本文件。
-- Permission code、scope、tenant/RLS、not-found leakage behavior 已確認。
-- Migration 包含必要 FK/index/constraint/RLS/grant，且不改寫 applied migration。
-- Mutation 的 transaction、audit/event、soft delete、optimistic lock 已按 domain 處理。
-- Request/response schema 與 error contract 已測試。
-- Unit tests 與必要的 DB/RLS integration tests 已通過。
-- `pytest`、`ruff`、`mypy`（適用範圍）與 `git diff --check` 通過。
-- README/API contract 在 architecture 或 setup 改變時同步更新。
-- Git staging 只包含本次 task，沒有混入 unrelated user changes 或 secrets。
+- Requirement and system-ownership boundaries are confirmed, and the change is implemented in the correct system.
+- Layer placement and dependency direction follow this document.
+- Permission code, scope, tenant/RLS behavior, and not-found leakage behavior are confirmed.
+- Migrations include necessary FKs, indexes, constraints, RLS, and grants, without rewriting applied migrations.
+- Mutations handle transaction, audit/event, soft delete, and optimistic lock requirements according to the domain.
+- Request/response schema and error contracts are tested.
+- Unit tests and required DB/RLS integration tests pass.
+- `pytest`, `ruff`, `mypy` in the relevant scope, and `git diff --check` pass.
+- README/API contracts are updated when architecture or setup changes.
+- Git staging contains only the current task and does not include unrelated user changes or secrets.
