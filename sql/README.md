@@ -1,6 +1,6 @@
-# Local DB roles
+# Local Database Roles
 
-建議用 PostgreSQL admin 帳號建立角色：
+Use a PostgreSQL administrator account to create the local roles:
 
 ```sql
 CREATE ROLE scm_owner WITH LOGIN PASSWORD 'local_owner_password';
@@ -12,17 +12,17 @@ GRANT CONNECT ON DATABASE scm_local TO app_runtime;
 ALTER SCHEMA public OWNER TO scm_owner;
 ```
 
-`.env`：
+Configure `.env` as follows:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://app_runtime:local_dev_password@localhost:5432/scm_local
 MIGRATION_DATABASE_URL=postgresql+asyncpg://scm_owner:local_owner_password@localhost:5432/scm_local
 ```
 
-再執行：
+Then run:
 
 ```bash
 alembic upgrade head
 ```
 
-Migration 會在偵測到 `app_runtime` 已存在時自動授予 runtime 所需 table 權限。
+When the migration detects that `app_runtime` already exists, it automatically grants the runtime table permissions required by the application.
